@@ -1,33 +1,25 @@
 package com.yourssu.lms
 
-import com.yourssu.lms.data.AttendanceType
-import com.yourssu.lms.data.LearnStatuses
-import com.yourssu.lms.data.Lecture
-import com.yourssu.lms.data.Subject
-import com.yourssu.lms.data.Terms
-import com.yourssu.lms.data.Todos
-import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.plugins.cookies.HttpCookies
-import io.ktor.client.request.forms.submitForm
-import io.ktor.client.request.get
-import io.ktor.client.request.headers
-import io.ktor.client.statement.bodyAsText
-import io.ktor.http.headers
-import io.ktor.http.parameters
-import io.ktor.serialization.kotlinx.json.json
+import com.yourssu.lms.data.*
+import io.ktor.client.*
+import io.ktor.client.call.*
+import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.client.plugins.cookies.*
+import io.ktor.client.request.*
+import io.ktor.client.request.forms.*
+import io.ktor.client.statement.*
+import io.ktor.http.*
+import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.json.Json
 import kotlin.time.ExperimentalTime
 
 const val LMS_LOGIN_URL = "https://smartid.ssu.ac.kr/Symtra_sso/smln_pcs.asp"
 const val LMS_CERT_URL = "https://lms.ssu.ac.kr/xn-sso/gw-cb.php"
-const val LMS_MYPAGE = "https://lms.ssu.ac.kr/mypage"
-var isLogin = false
-var lmsId = ""
-var apiBearerToken = ""
+private var isLogin = false
+private var lmsId = ""
+private var apiBearerToken = ""
 
-val client = HttpClient() {
+private val client = HttpClient() {
     install(HttpCookies)
     install(ContentNegotiation) {
         json(Json {
@@ -86,6 +78,7 @@ suspend fun loginLMS(id: String, password: String) : Boolean {
 }
 
 /**
+ * @
  * @throws IllegalStateException loginLMS()를 통해 로그인을 하지 않은 경우
  */
 @ExperimentalTime
