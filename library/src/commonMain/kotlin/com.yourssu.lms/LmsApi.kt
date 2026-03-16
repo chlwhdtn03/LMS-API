@@ -37,14 +37,14 @@ private val client = HttpClient() {
  * @return LMS로그인에 성공하면 true, 실패하면 false를 반환합니다.
  */
 suspend fun loginLMS(id: String, password: String) : Boolean {
-    val res = client.submitForm(
+    val loginResponse = client.submitForm(
         url = LMS_LOGIN_URL,
         formParameters = parameters {
             append("userid", id)
             append("pwd", password)
         }
     ).headers.getAll("Set-Cookie")
-    val token = res?.find { it.contains("sToken") }
+    val token = loginResponse?.find { it.contains("sToken") }
         ?.substringAfter("sToken=")
         ?.substringBefore(";") ?: ""
     println(token)
@@ -52,7 +52,7 @@ suspend fun loginLMS(id: String, password: String) : Boolean {
     if(token.isBlank())
         throw IllegalArgumentException("아이디 또는 비밀번호가 일치하지 않습니다.")
 
-    val rediectURL = client.get(LMS_CERT_URL) {
+    val redirectURL = client.get(LMS_CERT_URL) {
         url {
             parameters.append("sToken", token)
             parameters.append("sldno", id)
@@ -61,7 +61,7 @@ suspend fun loginLMS(id: String, password: String) : Boolean {
         .substringAfter("iframe.src=\"")
         .substringBefore("\";")
 
-    val apiToken = client.get(rediectURL)
+    val apiToken = client.get(redirectURL)
         .headers.getAll("Set-Cookie")?.find { it.contains("xn_api_token") }
         ?.substringAfter("xn_api_token=")
         ?.substringBefore(";") ?: ""
@@ -78,7 +78,6 @@ suspend fun loginLMS(id: String, password: String) : Boolean {
 }
 
 /**
- * @
  * @throws IllegalStateException loginLMS()를 통해 로그인을 하지 않은 경우
  */
 @ExperimentalTime
