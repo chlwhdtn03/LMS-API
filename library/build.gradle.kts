@@ -9,7 +9,7 @@ plugins {
     kotlin("plugin.serialization") version "2.3.0"
 }
 
-group = "com.yourssu.lms"
+group = "io.github.chlwhdtn03"
 version = "1.0.0"
 
 val ktor_version: String by project
@@ -17,7 +17,7 @@ val ktor_version: String by project
 kotlin {
     jvm()
     androidLibrary {
-        namespace = "com.yourssu.lms"
+        namespace = "io.github.chlwhdtn03.lms"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
 
@@ -70,31 +70,31 @@ mavenPublishing {
 
     signAllPublications()
 
-    coordinates(group.toString(), "library", version.toString())
+    coordinates(group.toString(), "lms", version.toString())
 
     pom {
         name = "LMS-API"
         description = "LMS 정보를 가져오는 라이브러리 입니다."
         inceptionYear = "2026"
-        url = "https://github.com/kotlin/multiplatform-library-template/"
+        url = "https://github.com/chlwhdtn03/LMS-API"
         licenses {
             license {
-                name = "XXX"
-                url = "YYY"
-                distribution = "ZZZ"
+                name = "The Apache License, Version 2.0"
+                url = "https://www.apache.org/licenses/LICENSE-2.0.txt"
+                distribution = "https://www.apache.org/licenses/LICENSE-2.0.txt"
             }
         }
         developers {
             developer {
                 id = "chlwhdtn03"
-                name = "campo"
-                url = "ZZZ"
+                name = "CHOI JONGSU"
+                url = "https://github.com/chlwhdtn03"
             }
         }
         scm {
-            url = "XXX"
-            connection = "YYY"
-            developerConnection = "ZZZ"
+            url = "https://github.com/chlwhdtn03/LMS-API"
+            connection = "scm:git:git://github.com/chlwhdtn03/LMS-API.git"
+            developerConnection = "scm:git:ssh://git@github.com/chlwhdtn03/LMS-API.git"
         }
     }
 }
