@@ -1,6 +1,6 @@
-package com.yourssu.lms
+package io.github.chlwhdtn03
 
-import com.yourssu.lms.data.*
+import io.github.chlwhdtn03.data.*
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.contentnegotiation.*

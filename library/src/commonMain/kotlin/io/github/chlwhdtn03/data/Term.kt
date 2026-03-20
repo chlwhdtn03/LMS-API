@@ -1,4 +1,4 @@
-package com.yourssu.lms.data
+package io.github.chlwhdtn03.data
 
 import kotlinx.serialization.Serializable
 import kotlin.time.ExperimentalTime
