@@ -1,8 +1,8 @@
 package io.github.kotlin.fibonacci
 
-import com.yourssu.m.getSubjects
-import com.yourssu.m.isLogin
-import com.yourssu.m.loginLMS
+import io.github.chlwhdtn03.getSubjects
+import io.github.chlwhdtn03.isLoggined
+import io.github.chlwhdtn03.loginLMS
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.time.ExperimentalTime
@@ -15,7 +15,7 @@ class LMSTest {
     @ExperimentalTime
     fun testLMS() = runTest {
         loginLMS("20222908", "if(login==6)")
-        println("로그인 성공 여부 : $isLogin")
+        println("로그인 성공 여부 : $isLoggined")
 
         val (subjects, timeTaken) = measureTimedValue {
             getSubjects()

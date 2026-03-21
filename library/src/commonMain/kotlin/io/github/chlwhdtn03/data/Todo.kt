@@ -60,8 +60,8 @@ data class TodoList(
     val unit_id: Int,
     val component_id: Int,
     val generated_from_lecture_content: Boolean,
-    val component_type: String,
-    val assignment_id: Int,
+    val component_type: String, // commons : 동영상 , assignment : 과제
+    val assignment_id: Int? = -1,
     val title: String,
     val due_date: String,
 )

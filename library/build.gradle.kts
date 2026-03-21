@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "io.github.chlwhdtn03"
-version = "1.0.0"
+version = "1.0.1"
 
 val ktor_version: String by project
 
@@ -44,6 +44,7 @@ kotlin {
         commonMain.dependencies {
             implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.7.1")
             implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
+            implementation("io.ktor:ktor-client-cio:${ktor_version}")
             implementation("io.ktor:ktor-client-core:${ktor_version}")
             implementation("io.ktor:ktor-client-content-negotiation:${ktor_version}")
             implementation("io.ktor:ktor-serialization-kotlinx-json:${ktor_version}")
@@ -55,7 +56,7 @@ kotlin {
         }
 
         androidMain.dependencies {
-            implementation("io.ktor:ktor-client-cio:${ktor_version}")
+            // implementation("io.ktor:ktor-client-cio:${ktor_version}")
         }
 
         iosMain.dependencies {

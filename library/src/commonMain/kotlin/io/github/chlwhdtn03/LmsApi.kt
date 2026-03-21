@@ -15,7 +15,7 @@ import kotlin.time.ExperimentalTime
 
 const val LMS_LOGIN_URL = "https://smartid.ssu.ac.kr/Symtra_sso/smln_pcs.asp"
 const val LMS_CERT_URL = "https://lms.ssu.ac.kr/xn-sso/gw-cb.php"
-private var isLogin = false
+var isLoggined = false
 private var lmsId = ""
 private var apiBearerToken = ""
 
@@ -72,9 +72,9 @@ suspend fun loginLMS(id: String, password: String) : Boolean {
 
     // TODO 토큰은 얻었지만, LMS_CERT_URL로 접속하고나서 실패하는 경우를 찾아야함
 
-    isLogin = true
+    isLoggined = true
     lmsId = id
-    return isLogin // 토큰값이 비어있거나 Null이면 로그인 실패
+    return isLoggined // 토큰값이 비어있거나 Null이면 로그인 실패
 }
 
 /**
@@ -82,7 +82,7 @@ suspend fun loginLMS(id: String, password: String) : Boolean {
  */
 @ExperimentalTime
 suspend fun getSubjects(): List<Subject> {
-    if (!isLogin || lmsId.isBlank())
+    if (!isLoggined || lmsId.isBlank())
         throw IllegalStateException("LMS 로그인이 되어있지 않습니다.")
 
     // 학기정보 불러옴
@@ -103,6 +103,10 @@ suspend fun getSubjects(): List<Subject> {
     }.body<LearnStatuses>()
 
     val todoList = client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/to_dos?term_ids[]=${semesterId}") {
+        headers { append("Authorization", "Bearer $apiBearerToken") }
+    }.body<Todos>()
+
+    val announceList = client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/to_dos?term_ids[]=${semesterId}") {
         headers { append("Authorization", "Bearer $apiBearerToken") }
     }.body<Todos>()
 
