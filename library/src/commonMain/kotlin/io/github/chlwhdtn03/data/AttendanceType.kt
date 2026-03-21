@@ -6,5 +6,5 @@ import kotlinx.serialization.Serializable
 enum class AttendanceType(
     val kor: String
 ) {
-    ATTENDANCE("출석"), ABSENCE("결석"), LATE("지각"), NONE("정보 없음")
+    ATTENDANCE("출석"), ABSENT("결석"), LATE("지각"), NONE("정보 없음")
 }

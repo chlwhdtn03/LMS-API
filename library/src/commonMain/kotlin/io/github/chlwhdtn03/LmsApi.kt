@@ -123,8 +123,8 @@ suspend fun getSubjects(): List<Subject> {
                 section.subsections.map { sub ->
                     when (sub.status) {
                         "attendance" -> AttendanceType.ATTENDANCE
-                        "absence" -> AttendanceType.ABSENCE
-                        "late" -> AttendanceType.LATE
+                        "absent" -> AttendanceType.ABSENT
+                        "late" -> AttendanceType.LATE // TODO 지각일때 뭐로 뜨는지 확인 필요
                         else -> AttendanceType.NONE
                     }
                 }
