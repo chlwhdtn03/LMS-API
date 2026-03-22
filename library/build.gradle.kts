@@ -15,7 +15,7 @@ version = "1.0.3"
 val ktor_version: String by project
 
 kotlin {
-//    jvm()
+    jvm()
     androidLibrary {
         namespace = "io.github.chlwhdtn03.lms"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
