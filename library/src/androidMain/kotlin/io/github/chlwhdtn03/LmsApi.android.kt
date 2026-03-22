@@ -18,7 +18,7 @@ actual fun pemToString(rawPem: String, rawPw: String): String {
 
     PEMParser(StringReader(pem)).use { parser ->
         val obj = parser.readObject()
-        val converter = JcaPEMKeyConverter().setProvider("BC")
+        val converter = JcaPEMKeyConverter()
 
         val privateKey = when (obj) {
             is PEMKeyPair -> converter.getPrivateKey(obj.privateKeyInfo)
