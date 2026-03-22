@@ -168,7 +168,7 @@ suspend fun getSubjects(): List<Subject> {
                     }
                 }
             } ?: emptyList(),
-            discussions = client.get("https://canvas.ssu.ac.kr/api/v1/courses/45446/discussion_topics?only_announcements=true&per_page=40&page=1&filter_by=all&no_avatar_fallback=1&include[]=sections_user_count&include[]=sections") {
+            discussions = client.get("https://canvas.ssu.ac.kr/api/v1/courses/${it.id}/discussion_topics?only_announcements=true&per_page=40&page=1&filter_by=all&no_avatar_fallback=1&include[]=sections_user_count&include[]=sections") {
                 headers {
                     append("Referer", "https://canvas.ssu.ac.kr/courses/${it.id}/announcements")
                 }
