@@ -1,5 +1,6 @@
 package io.github.chlwhdtn03.data
 
+import com.yourssu.lms.data.Discussion
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -12,5 +13,6 @@ data class Subject(
     val totalStudents: Int, // 수강인원
 
     val todoList: List<TodoList>, // 과제정보
-    val attendances: List<List<AttendanceType>> // 주간 출석정보 attendances[n+1주차][n+1번째 수업]
+    val attendances: List<List<AttendanceType>>, // 주간 출석정보 attendances[n+1주차][n+1번째 수업]
+    val discussions: List<Discussion> // 공지
 )

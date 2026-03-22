@@ -10,12 +10,12 @@ plugins {
 }
 
 group = "io.github.chlwhdtn03"
-version = "1.0.2"
+version = "1.0.3"
 
 val ktor_version: String by project
 
 kotlin {
-    jvm()
+//    jvm()
     androidLibrary {
         namespace = "io.github.chlwhdtn03.lms"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
@@ -38,7 +38,7 @@ kotlin {
     iosX64()
     iosArm64()
     iosSimulatorArm64()
-    linuxX64()
+//    linuxX64()
 
     sourceSets {
         commonMain.dependencies {
@@ -56,6 +56,8 @@ kotlin {
         }
 
         androidMain.dependencies {
+            implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+            implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
             // implementation("io.ktor:ktor-client-cio:${ktor_version}")
         }
 
