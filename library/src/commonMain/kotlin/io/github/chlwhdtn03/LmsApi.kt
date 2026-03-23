@@ -29,6 +29,7 @@ private val client = HttpClient() {
             ignoreUnknownKeys = true
             prettyPrint = true
             isLenient = true
+            coerceInputValues = true
         })
     }
     followRedirects = true
@@ -120,40 +121,88 @@ suspend fun loginLMS(id: String, password: String) : Boolean {
     return isLoggined // 토큰값이 비어있거나 Null이면 로그인 실패
 }
 
-/**
- * @throws IllegalStateException loginLMS()를 통해 로그인을 하지 않은 경우
- */
-@ExperimentalTime
-suspend fun getSubjects(): List<Subject> {
+@OptIn(ExperimentalTime::class)
+suspend fun getTerms(): List<Term> {
     if (!isLoggined || lmsId.isBlank())
         throw IllegalStateException("LMS 로그인이 되어있지 않습니다.")
 
     // 학기정보 불러옴
-    val semesterResponse = client.get("https://canvas.ssu.ac.kr/learningx/api/v1/users/${lmsId}/terms?include_invited_course_contained=true") {
+    return client.get("https://canvas.ssu.ac.kr/learningx/api/v1/users/${lmsId}/terms?include_invited_course_contained=true") {
         headers { append("Authorization", "Bearer $apiBearerToken") }
-    }.body<Terms>()
+    }.body<Terms>().enrollment_terms
+}
 
-    // 제일 최신학기 정보 얻어옴
-    val semesterId = semesterResponse.enrollment_terms.firstOrNull()?.id
-        ?: throw IllegalStateException("학기 정보를 불러오지 못했습니다.")
+/**
+ * @throws IllegalStateException loginLMS()를 통해 로그인을 하지 않은 경우
+ */
+@ExperimentalTime
+suspend fun getSubjects(term: Term): List<Subject> {
+    if (!isLoggined || lmsId.isBlank())
+        throw IllegalStateException("LMS 로그인이 되어있지 않습니다.")
 
-    val lectures = client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/courses?term_ids[]=$semesterId") {
+    val lectures = client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/courses?term_ids[]=${term.id}") {
         headers { append("Authorization", "Bearer $apiBearerToken") }
     }.body<List<Lecture>>()
 
-    val learnStatuses = client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/learnstatus?term_ids=${semesterId}&type=subsection") {
+    val learnStatuses = client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/learnstatus?term_ids=${term.id}&type=subsection") {
         headers { append("Authorization", "Bearer $apiBearerToken") }
     }.body<LearnStatuses>()
 
-    val todoList = client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/to_dos?term_ids[]=${semesterId}") {
+    val todoList = client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/to_dos?term_ids[]=${term.id}") {
         headers { append("Authorization", "Bearer $apiBearerToken") }
     }.body<Todos>()
 
     return lectures.map {
+
+        val assignmentGroups = client.get("https://canvas.ssu.ac.kr/api/v1/courses/${it.id}/assignment_groups") {
+            url {
+                parameters.append("exclude_response_fields[]", "description")
+                parameters.append("exclude_response_fields[]", "rubric")
+                parameters.append("include[]", "assignments")
+                parameters.append("include[]", "discussion_topic")
+                parameters.append("override_assignment_dates", "true")
+                parameters.append("per_page", "50")
+            }
+        }.body<List<AssignmentGroup>>()
+
+        val submissions = client.get("https://canvas.ssu.ac.kr/api/v1/courses/${it.id}/students/submissions") {
+            url {
+                parameters.append("per_page", "50")
+            }
+        }.body<List<Submission>>()
+
+        val scoredWithAssignments = submissions.filter { it2 -> it2.score > Double.MIN_VALUE }.map { submission ->
+            val matchedGroup = assignmentGroups.find { group ->
+                group.assignments.any { assignment ->
+                    assignment.id == submission.assignment_id
+                }
+            }
+            val matchedAssignment = matchedGroup?.assignments?.find { assignment ->
+                assignment.id == submission.assignment_id
+            }
+
+            if(matchedGroup == null || matchedAssignment == null) {
+                ScoredAssignment(
+                    groupName = matchedGroup?.name ?: "알 수 없음",
+                    name = matchedAssignment?.name ?: "알 수 없음",
+                    score = submission.score,
+                    maxScore = matchedAssignment?.points_possible ?: 0.toDouble()
+                )
+            } else {
+                ScoredAssignment(
+                    groupName = matchedGroup.name,
+                    name = matchedAssignment.name,
+                    score = submission.score,
+                    maxScore = matchedAssignment.points_possible
+                )
+            }
+
+        }
+
         Subject(
             id = it.id,
             termId = it.term_id,
-            termName = semesterResponse.enrollment_terms.find { term -> term.id == it.term_id }?.name ?: "학기정보 없음",
+            termName = term.name ?: "학기정보 없음",
             name = it.name,
             professor = it.professors,
             totalStudents = it.total_students,
@@ -172,7 +221,8 @@ suspend fun getSubjects(): List<Subject> {
                 headers {
                     append("Referer", "https://canvas.ssu.ac.kr/courses/${it.id}/announcements")
                 }
-            }.body<List<Discussion>>()
+            }.body<List<Discussion>>(),
+            scoredAssignments = scoredWithAssignments,
         )
     }
 }

@@ -8,7 +8,7 @@ import kotlin.time.Instant
 @ExperimentalTime
 data class Term(
     val id: Int? = -1,
-    val name: String? = "",
+    val name: String? = null,
     val start_at: Instant?,
     val end_at: Instant?,
 )

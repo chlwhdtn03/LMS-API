@@ -101,6 +101,6 @@ data class Discussion(
     val created_at: String,
     val discussion_type: String,
     val attachments: List<Attachment>,
-    val user_name: String, //작성자
+    val user_name: String?, //작성자
 
 )
