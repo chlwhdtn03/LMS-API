@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "io.github.chlwhdtn03"
-version = "1.0.7"
+version = "1.1.0"
 
 val ktor_version: String by project
 

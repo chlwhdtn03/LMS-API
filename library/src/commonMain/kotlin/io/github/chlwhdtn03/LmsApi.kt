@@ -133,27 +133,34 @@ suspend fun getTerms(): List<Term> {
 }
 
 /**
+ * @param loadingState Float 변수에는 진행률을 각 단계마다 전달합니다. (0.0f~1.0f)
  * @throws IllegalStateException loginLMS()를 통해 로그인을 하지 않은 경우
  */
 @ExperimentalTime
-suspend fun getSubjects(term: Term): List<Subject> {
+suspend fun getSubjects(term: Term, loadingState: (Float) -> Unit = {}): List<Subject> {
     if (!isLoggined || lmsId.isBlank())
         throw IllegalStateException("LMS 로그인이 되어있지 않습니다.")
 
     val lectures = client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/courses?term_ids[]=${term.id}") {
         headers { append("Authorization", "Bearer $apiBearerToken") }
     }.body<List<Lecture>>()
+    loadingState(0.1f)
 
     val learnStatuses = client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/learnstatus?term_ids=${term.id}&type=subsection") {
         headers { append("Authorization", "Bearer $apiBearerToken") }
     }.body<LearnStatuses>()
+    loadingState(0.2f)
 
     val todoList = client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/to_dos?term_ids[]=${term.id}") {
         headers { append("Authorization", "Bearer $apiBearerToken") }
     }.body<Todos>()
+    loadingState(0.3f)
 
+    val weight = 0.7f / lectures.size
+    var nowProgress = 0.3f
     return lectures.map {
-
+        nowProgress += weight
+        loadingState(nowProgress)
         val assignmentGroups = client.get("https://canvas.ssu.ac.kr/api/v1/courses/${it.id}/assignment_groups") {
             url {
                 parameters.append("exclude_response_fields[]", "description")
