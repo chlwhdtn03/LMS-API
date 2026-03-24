@@ -1,6 +1,5 @@
 package io.github.chlwhdtn03.data
 
-import com.yourssu.lms.data.Discussion
 import kotlinx.serialization.Serializable
 
 @Serializable

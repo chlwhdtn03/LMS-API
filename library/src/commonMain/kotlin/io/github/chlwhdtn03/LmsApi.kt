@@ -1,6 +1,5 @@
 package io.github.chlwhdtn03
 
-import com.yourssu.lms.data.Discussion
 import io.github.chlwhdtn03.data.*
 import io.ktor.client.*
 import io.ktor.client.call.*
