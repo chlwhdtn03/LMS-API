@@ -89,7 +89,7 @@ data class Assignment(
     val id: Int,
     val points_possible: Double,
     val name: String,
-    val due_at: String = "",
+    val due_at: String? = "",
 )
 
 /**
