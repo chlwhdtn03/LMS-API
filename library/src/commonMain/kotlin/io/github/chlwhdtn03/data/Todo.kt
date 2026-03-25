@@ -63,7 +63,7 @@ data class TodoList(
     val component_type: String, // commons : 동영상 , assignment : 과제
     val assignment_id: Int? = -1,
     val title: String,
-    val due_date: String,
+    val due_date: String = "",
 )
 
 @Serializable
