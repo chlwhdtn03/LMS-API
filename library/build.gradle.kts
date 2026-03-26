@@ -35,6 +35,7 @@ kotlin {
             }
         }
     }
+    macosArm64()
     iosX64()
     iosArm64()
     iosSimulatorArm64()
@@ -66,6 +67,10 @@ kotlin {
         }
 
         iosMain.dependencies {
+            implementation(libs.ktor.client.darwin)
+        }
+
+        macosArm64Main.dependencies {
             implementation(libs.ktor.client.darwin)
         }
 
