@@ -14,3 +14,4 @@ xcuserdata
 library/src/commonTest/kotlin/LMSTest.kt
 library/src/androidHostTest/kotlin/AndroidLMSTest.kt
 library/src/iosTest/kotlin/IosLMSTest.kt
+library/src/jvmTest/kotlin/JvmLMSTest.kt

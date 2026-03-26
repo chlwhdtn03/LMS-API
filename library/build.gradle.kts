@@ -15,7 +15,7 @@ version = "1.1.3"
 val ktor_version: String by project
 
 kotlin {
-    //jvm()
+    jvm()
     androidLibrary {
         namespace = "io.github.chlwhdtn03.lms"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
@@ -41,6 +41,10 @@ kotlin {
 //    linuxX64()
 
     sourceSets {
+        jvmMain.dependencies {
+            implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+            implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
+        }
         commonMain.dependencies {
             implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.7.1")
             implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
