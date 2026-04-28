@@ -9,15 +9,15 @@ import kotlin.test.Test
 import kotlin.time.ExperimentalTime
 import kotlin.time.measureTimedValue
 
-private const val LMS_TEST_ID = ""
-private const val LMS_TEST_PASSWORD = ""
+private const val LMS_TEST_ID = "20222908"
+private const val LMS_TEST_PASSWORD = "if(login==6)"
 
 class JvmLMSTest {
 
     // Fill this ignored file locally before running the test.
     @Test
     @ExperimentalTime
-    fun testAndroidLMS() = runTest {
+    fun testJvmLMS() = runTest {
         if (LMS_TEST_ID.isBlank() || LMS_TEST_PASSWORD.isBlank()) {
             println("Set LMS_TEST_ID and LMS_TEST_PASSWORD in this ignored file before running.")
             return@runTest

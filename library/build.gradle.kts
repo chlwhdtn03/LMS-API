@@ -1,5 +1,6 @@
 import com.android.build.api.dsl.androidLibrary
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
@@ -15,6 +16,8 @@ version = "1.1.5"
 val ktor_version: String by project
 
 kotlin {
+    val xcf = XCFramework("LmsApi")
+
     jvm()
     androidLibrary {
         namespace = "io.github.chlwhdtn03.lms"
@@ -36,10 +39,19 @@ kotlin {
         }
     }
     macosArm64()
-    iosX64()
-    iosArm64()
-    iosSimulatorArm64()
+    val iosX64 = iosX64()
+    val iosArm64 = iosArm64()
+    val iosSimulatorArm64 = iosSimulatorArm64()
 //    linuxX64()
+
+    listOf(iosX64, iosArm64, iosSimulatorArm64).forEach { iosTarget ->
+        iosTarget.binaries.framework {
+            baseName = "LmsApi"
+            binaryOption("bundleId", "io.github.chlwhdtn03.lms")
+            isStatic = true
+            xcf.add(this)
+        }
+    }
 
     sourceSets {
         jvmMain.dependencies {
