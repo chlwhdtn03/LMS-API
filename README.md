@@ -78,6 +78,116 @@ library/build/XCFrameworks/release/LmsApi.xcframework
 - 즉 Xcode에서 import 해서 쓰는 것은 가능하지만, 내부 구현은 여전히 Kotlin입니다.
 - 순수 Swift Package나 Swift 소스 라이브러리가 필요하다면 별도 Swift 구현이나 Swift 래퍼 타깃을 만들어야 합니다.
 
+Xcode에 붙일 때는 보통 아래 순서로 진행하면 됩니다.
+
+1. `LmsApi.xcframework`를 Xcode 프로젝트로 드래그해서 추가
+2. 타깃의 `Frameworks, Libraries, and Embedded Content`에 `LmsApi.xcframework` 연결 확인
+3. 현재 빌드 설정은 `isStatic = true` 이므로 Embed 옵션은 `Do Not Embed` 사용
+
+아래는 iOS 앱에서 `XCFramework`를 직접 사용할 때의 Swift 예제입니다. Kotlin의 `suspend` 함수는 Apple 쪽에서 completion handler 형태로 노출되므로, 앱에서 한 번 `async/await` 래퍼를 만들어 두면 쓰기 편합니다.
+
+```swift
+import Foundation
+import LmsApi
+
+enum LMSXCFrameworkError: Error {
+    case loginFailed
+    case noTerms
+}
+
+enum LMSXCFrameworkClient {
+    static func login(id: String, password: String) async throws -> Bool {
+        try await withCheckedThrowingContinuation { continuation in
+            LmsApiKt.loginLMS(id: id, password: password) { success, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+
+                continuation.resume(returning: success?.boolValue == true)
+            }
+        }
+    }
+
+    static func getTerms() async throws -> [Term] {
+        try await withCheckedThrowingContinuation { continuation in
+            LmsApiKt.getTerms { terms, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+
+                continuation.resume(returning: terms ?? [])
+            }
+        }
+    }
+
+    static func getSubjects(
+        term: Term,
+        onProgress: @escaping (Float) -> Void = { _ in }
+    ) async throws -> [Subject] {
+        try await withCheckedThrowingContinuation { continuation in
+            LmsApiKt.getSubjects(term: term, loadingState: { progress in
+                onProgress(progress.floatValue)
+            }) { subjects, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+
+                continuation.resume(returning: subjects ?? [])
+            }
+        }
+    }
+}
+
+func loadLmsFromXcframework() {
+    Task {
+        do {
+            let loggedIn = try await LMSXCFrameworkClient.login(
+                id: "20222908",
+                password: "비밀번호"
+            )
+
+            guard loggedIn else {
+                throw LMSXCFrameworkError.loginFailed
+            }
+
+            let terms = try await LMSXCFrameworkClient.getTerms()
+            guard let selectedTerm = terms.last else {
+                throw LMSXCFrameworkError.noTerms
+            }
+
+            print("선택한 학기: \(selectedTerm.name ?? "이름 없음")")
+
+            let subjects = try await LMSXCFrameworkClient.getSubjects(
+                term: selectedTerm
+            ) { progress in
+                print("불러오는 중: \(Int(progress * 100))%")
+            }
+
+            for subject in subjects {
+                print("과목명: \(subject.name)")
+                print("교수명: \(subject.professor)")
+                print("할 일 개수: \(subject.todoList.count)")
+
+                if let firstTodo = subject.todoList.first {
+                    print("첫 과제: \(firstTodo.title)")
+                }
+            }
+        } catch {
+            print("LMS 조회 실패: \(error)")
+        }
+    }
+}
+```
+
+추가로 알아둘 점:
+
+- Swift에서는 top-level Kotlin 함수가 전역 함수가 아니라 `LmsApiKt.loginLMS(...)`, `LmsApiKt.getTerms(...)` 같은 형태로 보입니다.
+- 반환 모델도 Swift에서 그대로 접근할 수 있어서 `subject.name`, `subject.todoList`, `firstTodo.title`처럼 사용하면 됩니다.
+- 현재 API는 Kotlin 예외를 iOS 친화적인 형태로 모두 감싸서 내려주지는 않으므로, 실서비스에서는 iOS 전용 래퍼나 Kotlin 쪽 Result 래퍼 API를 하나 더 두는 것을 권장합니다.
+
 ## 2. 기본 사용 순서
 
 이 라이브러리의 사용 순서는 고정되어 있습니다.

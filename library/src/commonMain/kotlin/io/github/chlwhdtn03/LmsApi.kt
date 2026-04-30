@@ -233,6 +233,46 @@ suspend fun getSubjects(term: Term, loadingState: (Float) -> Unit = {}): List<Su
     }
 }
 
+/**
+ * 제출해야 할 과제, 동영상 시청 정보만 빠르게 가져옵니다. (SSU-Time 전용)
+ * @param loadingState Float 변수에는 진행률을 각 단계마다 전달합니다. (0.0f~1.0f)
+ * @throws IllegalStateException loginLMS()를 통해 로그인을 하지 않은 경우
+ */
+@ExperimentalTime
+suspend fun getTodoList(term: Term, loadingState: (Float) -> Unit = {}): List<Subject> {
+    if (!isLoggined || lmsId.isBlank())
+        throw IllegalStateException("LMS 로그인이 되어있지 않습니다.")
+
+    val lectures = client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/courses?term_ids[]=${term.id}") {
+        headers { append("Authorization", "Bearer $apiBearerToken") }
+    }.body<List<Lecture>>()
+    loadingState(0.1f)
+
+    val todoList = client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/to_dos?term_ids[]=${term.id}") {
+        headers { append("Authorization", "Bearer $apiBearerToken") }
+    }.body<Todos>()
+    loadingState(0.3f)
+
+    val weight = 0.7f / lectures.size
+    var nowProgress = 0.3f
+    return lectures.map {
+        nowProgress += weight
+        loadingState(nowProgress)
+        Subject(
+            id = it.id,
+            termId = it.term_id,
+            termName = term.name ?: "학기정보 없음",
+            name = it.name,
+            professor = it.professors,
+            totalStudents = it.total_students,
+            todoList = todoList.to_dos.find { todo -> todo.course_id == it.id }?.todo_list ?: emptyList(),
+            attendances = emptyList(),
+            discussions = emptyList(),
+            scoredAssignments = emptyList(),
+        )
+    }
+}
+
 fun normalizePem(raw: String): String {
     return raw
         .replace("\\n", "\n")
