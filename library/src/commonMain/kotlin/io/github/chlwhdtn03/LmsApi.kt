@@ -202,7 +202,6 @@ suspend fun getSubjects(term: Term, loadingState: (Float) -> Unit = {}): List<Su
                     maxScore = matchedAssignment.points_possible
                 )
             }
-
         }
 
         Subject(
@@ -228,6 +227,7 @@ suspend fun getSubjects(term: Term, loadingState: (Float) -> Unit = {}): List<Su
                     append("Referer", "https://canvas.ssu.ac.kr/courses/${it.id}/announcements")
                 }
             }.body<List<Discussion>>(),
+            assignments = submissions,
             scoredAssignments = scoredWithAssignments,
         )
     }
@@ -258,6 +258,13 @@ suspend fun getTodoList(term: Term, loadingState: (Float) -> Unit = {}): List<Su
     return lectures.map {
         nowProgress += weight
         loadingState(nowProgress)
+
+        val submissions = client.get("https://canvas.ssu.ac.kr/api/v1/courses/${it.id}/students/submissions") {
+            url {
+                parameters.append("per_page", "50")
+            }
+        }.body<List<Submission>>()
+
         Subject(
             id = it.id,
             termId = it.term_id,
@@ -268,6 +275,7 @@ suspend fun getTodoList(term: Term, loadingState: (Float) -> Unit = {}): List<Su
             todoList = todoList.to_dos.find { todo -> todo.course_id == it.id }?.todo_list ?: emptyList(),
             attendances = emptyList(),
             discussions = emptyList(),
+            assignments = submissions,
             scoredAssignments = emptyList(),
         )
     }

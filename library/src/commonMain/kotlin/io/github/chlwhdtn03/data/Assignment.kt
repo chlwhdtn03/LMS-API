@@ -163,6 +163,13 @@ data class Assignment(
 @Serializable
 data class Submission(
     val assignment_id: Int,
+    val attachments: List<Attachment> = emptyList(),
+    val attempt: Int = -1, // 제출 횟수
+    val cached_due_date: String, // LMS 캐시 상 마감일
+    val late: Boolean, // 지각 여부
+    val preview_url: String, // 제출한 파일 미리보기 주소
+    val submitted_at: String = "",
+    val submission_type: String = "",
     val score: Double = Double.MIN_VALUE,
 )
 
