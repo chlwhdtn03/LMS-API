@@ -1,9 +1,9 @@
 package io.github.kotlin.fibonacci
 
-import io.github.chlwhdtn03.getSubjects
-import io.github.chlwhdtn03.getTerms
-import io.github.chlwhdtn03.isLoggined
-import io.github.chlwhdtn03.loginLMS
+import io.github.chlwhdtn03.LmsApi.getSubjects
+import io.github.chlwhdtn03.LmsApi.getTerms
+import io.github.chlwhdtn03.LmsApi.isLoggined
+import io.github.chlwhdtn03.LmsApi.loginLMS
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.time.ExperimentalTime
