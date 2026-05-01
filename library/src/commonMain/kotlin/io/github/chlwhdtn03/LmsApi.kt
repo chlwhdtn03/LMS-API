@@ -35,6 +35,132 @@ object LmsApi {
         followRedirects = true
     }
 
+    private data class AssignmentMetadata(
+        val groupName: String,
+        val name: String,
+        val maxScore: Double,
+    )
+
+    private fun checkLoggedIn() {
+        if (!isLoggined || lmsId.isBlank()) {
+            throw IllegalStateException("LMS 로그인이 되어있지 않습니다.")
+        }
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private suspend fun fetchTerms(): List<Term> {
+        return client.get("https://canvas.ssu.ac.kr/learningx/api/v1/users/${lmsId}/terms?include_invited_course_contained=true") {
+            headers { append("Authorization", "Bearer $apiBearerToken") }
+        }.body<Terms>().enrollment_terms
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private suspend fun fetchLectures(term: Term): List<Lecture> {
+        return client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/courses?term_ids[]=${term.id}") {
+            headers { append("Authorization", "Bearer $apiBearerToken") }
+        }.body<List<Lecture>>()
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private suspend fun fetchLearnStatuses(term: Term): LearnStatuses {
+        return client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/learnstatus?term_ids=${term.id}&type=subsection") {
+            headers { append("Authorization", "Bearer $apiBearerToken") }
+        }.body<LearnStatuses>()
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private suspend fun fetchTodos(term: Term): Todos {
+        return client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/to_dos?term_ids[]=${term.id}") {
+            headers { append("Authorization", "Bearer $apiBearerToken") }
+        }.body<Todos>()
+    }
+
+    private suspend fun fetchAssignmentGroups(courseId: Int): List<AssignmentGroup> {
+        return client.get("https://canvas.ssu.ac.kr/api/v1/courses/${courseId}/assignment_groups") {
+            url {
+                parameters.append("exclude_response_fields[]", "description")
+                parameters.append("exclude_response_fields[]", "rubric")
+                parameters.append("include[]", "assignments")
+                parameters.append("include[]", "discussion_topic")
+                parameters.append("override_assignment_dates", "true")
+                parameters.append("per_page", "50")
+            }
+        }.body<List<AssignmentGroup>>()
+    }
+
+    private suspend fun fetchSubmissions(courseId: Int): List<Submission> {
+        return client.get("https://canvas.ssu.ac.kr/api/v1/courses/${courseId}/students/submissions") {
+            url {
+                parameters.append("per_page", "50")
+            }
+        }.body<List<Submission>>()
+    }
+
+    private suspend fun fetchDiscussions(courseId: Int): List<Discussion> {
+        return client.get("https://canvas.ssu.ac.kr/api/v1/courses/${courseId}/discussion_topics?only_announcements=true&per_page=40&page=1&filter_by=all&no_avatar_fallback=1&include[]=sections_user_count&include[]=sections") {
+            headers {
+                append("Referer", "https://canvas.ssu.ac.kr/courses/${courseId}/announcements")
+            }
+        }.body<List<Discussion>>()
+    }
+
+    private inline fun <T> Iterable<T>.associateFirstById(keySelector: (T) -> Int): Map<Int, T> {
+        val result = mutableMapOf<Int, T>()
+        for (item in this) {
+            val key = keySelector(item)
+            if (!result.containsKey(key)) {
+                result[key] = item
+            }
+        }
+        return result
+    }
+
+    private fun List<AssignmentGroup>.toAssignmentMetadataById(): Map<Int, AssignmentMetadata> {
+        val result = mutableMapOf<Int, AssignmentMetadata>()
+        for (group in this) {
+            for (assignment in group.assignments) {
+                if (!result.containsKey(assignment.id)) {
+                    result[assignment.id] = AssignmentMetadata(
+                        groupName = group.name,
+                        name = assignment.name,
+                        maxScore = assignment.points_possible,
+                    )
+                }
+            }
+        }
+        return result
+    }
+
+    private fun applyAssignmentMetadata(
+        submissions: List<Submission>,
+        assignmentMetadataById: Map<Int, AssignmentMetadata>,
+    ) {
+        for (submission in submissions) {
+            val metadata = assignmentMetadataById[submission.assignment_id] ?: continue
+            submission.name = metadata.name
+            submission.groupName = metadata.groupName
+        }
+    }
+
+    private fun buildScoredAssignments(
+        submissions: List<Submission>,
+        assignmentMetadataById: Map<Int, AssignmentMetadata>,
+    ): List<ScoredAssignment> {
+        val result = mutableListOf<ScoredAssignment>()
+        for (submission in submissions) {
+            if (!(submission.score > Double.NEGATIVE_INFINITY)) continue
+
+            val metadata = assignmentMetadataById[submission.assignment_id]
+            result += ScoredAssignment(
+                groupName = metadata?.groupName ?: "알 수 없음",
+                name = metadata?.name ?: "알 수 없음",
+                score = submission.score,
+                maxScore = metadata?.maxScore ?: 0.0,
+            )
+        }
+        return result
+    }
+
     /**
      * @param id LMS 아이디
      * @param password LMS 비밀번호
@@ -126,13 +252,8 @@ object LmsApi {
 
     @OptIn(ExperimentalTime::class)
     suspend fun getTerms(): List<Term> {
-        if (!isLoggined || lmsId.isBlank())
-            throw IllegalStateException("LMS 로그인이 되어있지 않습니다.")
-
-        // 학기정보 불러옴
-        return client.get("https://canvas.ssu.ac.kr/learningx/api/v1/users/${lmsId}/terms?include_invited_course_contained=true") {
-            headers { append("Authorization", "Bearer $apiBearerToken") }
-        }.body<Terms>().enrollment_terms
+        checkLoggedIn()
+        return fetchTerms()
     }
 
     /**
@@ -141,86 +262,38 @@ object LmsApi {
      */
     @ExperimentalTime
     suspend fun getSubjects(term: Term, loadingState: (Float) -> Unit = {}): List<Subject> {
-        if (!isLoggined || lmsId.isBlank())
-            throw IllegalStateException("LMS 로그인이 되어있지 않습니다.")
+        checkLoggedIn()
 
-        val lectures =
-            client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/courses?term_ids[]=${term.id}") {
-                headers { append("Authorization", "Bearer $apiBearerToken") }
-            }.body<List<Lecture>>()
+        val lectures = fetchLectures(term)
         loadingState(0.1f)
 
-        val learnStatuses =
-            client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/learnstatus?term_ids=${term.id}&type=subsection") {
-                headers { append("Authorization", "Bearer $apiBearerToken") }
-            }.body<LearnStatuses>()
+        val learnStatuses = fetchLearnStatuses(term)
         loadingState(0.2f)
 
-        val todoList =
-            client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/to_dos?term_ids[]=${term.id}") {
-                headers { append("Authorization", "Bearer $apiBearerToken") }
-            }.body<Todos>()
+        val todoList = fetchTodos(term)
         loadingState(0.3f)
 
+        val todoByCourseId = todoList.to_dos.associateFirstById { it.course_id }
+        val learnStatusByCourseId = learnStatuses.learnstatuses.associateFirstById { it.course.id }
         val weight = 0.7f / lectures.size
         var nowProgress = 0.3f
-        return lectures.map {
+        return lectures.map { lecture ->
             nowProgress += weight
             loadingState(nowProgress)
-            val assignmentGroups = client.get("https://canvas.ssu.ac.kr/api/v1/courses/${it.id}/assignment_groups") {
-                url {
-                    parameters.append("exclude_response_fields[]", "description")
-                    parameters.append("exclude_response_fields[]", "rubric")
-                    parameters.append("include[]", "assignments")
-                    parameters.append("include[]", "discussion_topic")
-                    parameters.append("override_assignment_dates", "true")
-                    parameters.append("per_page", "50")
-                }
-            }.body<List<AssignmentGroup>>()
 
-            val submissions = client.get("https://canvas.ssu.ac.kr/api/v1/courses/${it.id}/students/submissions") {
-                url {
-                    parameters.append("per_page", "50")
-                }
-            }.body<List<Submission>>()
-
-            val scoredWithAssignments =
-                submissions.filter { it2 -> it2.score > Double.NEGATIVE_INFINITY }.map { submission ->
-                    val matchedGroup = assignmentGroups.find { group ->
-                        group.assignments.any { assignment ->
-                            assignment.id == submission.assignment_id
-                        }
-                    }
-                    val matchedAssignment = matchedGroup?.assignments?.find { assignment ->
-                        assignment.id == submission.assignment_id
-                    }
-
-                    if (matchedGroup == null || matchedAssignment == null) {
-                        ScoredAssignment(
-                            groupName = matchedGroup?.name ?: "알 수 없음",
-                            name = matchedAssignment?.name ?: "알 수 없음",
-                            score = submission.score,
-                            maxScore = matchedAssignment?.points_possible ?: 0.toDouble()
-                        )
-                    } else {
-                        ScoredAssignment(
-                            groupName = matchedGroup.name,
-                            name = matchedAssignment.name,
-                            score = submission.score,
-                            maxScore = matchedAssignment.points_possible
-                        )
-                    }
-                }
+            val assignmentMetadataById = fetchAssignmentGroups(lecture.id).toAssignmentMetadataById()
+            val submissions = fetchSubmissions(lecture.id)
+            applyAssignmentMetadata(submissions, assignmentMetadataById)
 
             Subject(
-                id = it.id,
-                termId = it.term_id,
+                id = lecture.id,
+                termId = lecture.term_id,
                 termName = term.name ?: "학기정보 없음",
-                name = it.name,
-                professor = it.professors,
-                totalStudents = it.total_students,
-                todoList = todoList.to_dos.find { todo -> todo.course_id == it.id }?.todo_list ?: emptyList(),
-                attendances = learnStatuses.learnstatuses.find { status -> status.course.id == it.id }?.sections?.map { section ->
+                name = lecture.name,
+                professor = lecture.professors,
+                totalStudents = lecture.total_students,
+                todoList = todoByCourseId[lecture.id]?.todo_list ?: emptyList(),
+                attendances = learnStatusByCourseId[lecture.id]?.sections?.map { section ->
                     section.subsections.map { sub ->
                         when (sub.status) {
                             "attendance" -> AttendanceType.ATTENDANCE
@@ -230,13 +303,9 @@ object LmsApi {
                         }
                     }
                 } ?: emptyList(),
-                discussions = client.get("https://canvas.ssu.ac.kr/api/v1/courses/${it.id}/discussion_topics?only_announcements=true&per_page=40&page=1&filter_by=all&no_avatar_fallback=1&include[]=sections_user_count&include[]=sections") {
-                    headers {
-                        append("Referer", "https://canvas.ssu.ac.kr/courses/${it.id}/announcements")
-                    }
-                }.body<List<Discussion>>(),
+                discussions = fetchDiscussions(lecture.id),
                 submissions = submissions,
-                scoredAssignments = scoredWithAssignments,
+                scoredAssignments = buildScoredAssignments(submissions, assignmentMetadataById),
             )
         }
     }
@@ -248,41 +317,33 @@ object LmsApi {
      */
     @ExperimentalTime
     suspend fun getTodoList(term: Term, loadingState: (Float) -> Unit = {}): List<Subject> {
-        if (!isLoggined || lmsId.isBlank())
-            throw IllegalStateException("LMS 로그인이 되어있지 않습니다.")
+        checkLoggedIn()
 
-        val lectures =
-            client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/courses?term_ids[]=${term.id}") {
-                headers { append("Authorization", "Bearer $apiBearerToken") }
-            }.body<List<Lecture>>()
+        val lectures = fetchLectures(term)
         loadingState(0.1f)
 
-        val todoList =
-            client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/to_dos?term_ids[]=${term.id}") {
-                headers { append("Authorization", "Bearer $apiBearerToken") }
-            }.body<Todos>()
+        val todoList = fetchTodos(term)
         loadingState(0.3f)
 
+        val todoByCourseId = todoList.to_dos.associateFirstById { it.course_id }
         val weight = 0.7f / lectures.size
         var nowProgress = 0.3f
-        return lectures.map {
+        return lectures.map { lecture ->
             nowProgress += weight
             loadingState(nowProgress)
 
-            val submissions = client.get("https://canvas.ssu.ac.kr/api/v1/courses/${it.id}/students/submissions") {
-                url {
-                    parameters.append("per_page", "50")
-                }
-            }.body<List<Submission>>()
+            val assignmentMetadataById = fetchAssignmentGroups(lecture.id).toAssignmentMetadataById()
+            val submissions = fetchSubmissions(lecture.id)
+            applyAssignmentMetadata(submissions, assignmentMetadataById)
 
             Subject(
-                id = it.id,
-                termId = it.term_id,
+                id = lecture.id,
+                termId = lecture.term_id,
                 termName = term.name ?: "학기정보 없음",
-                name = it.name,
-                professor = it.professors,
-                totalStudents = it.total_students,
-                todoList = todoList.to_dos.find { todo -> todo.course_id == it.id }?.todo_list ?: emptyList(),
+                name = lecture.name,
+                professor = lecture.professors,
+                totalStudents = lecture.total_students,
+                todoList = todoByCourseId[lecture.id]?.todo_list ?: emptyList(),
                 attendances = emptyList(),
                 discussions = emptyList(),
                 submissions = submissions,

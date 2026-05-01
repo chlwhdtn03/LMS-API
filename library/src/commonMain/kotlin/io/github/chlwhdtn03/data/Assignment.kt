@@ -171,7 +171,10 @@ data class Submission(
     val submitted_at: String = "",
     val submission_type: String = "",
     val score: Double = Double.NEGATIVE_INFINITY,
-)
+) {
+    var name: String = "알 수 없음" // 과제 이름
+    var groupName: String = "알 수 없음" // 과제 대분류명
+}
 
 @Serializable
 data class ScoredAssignment(
