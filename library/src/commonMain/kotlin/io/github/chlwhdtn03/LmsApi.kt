@@ -62,6 +62,12 @@ object LmsApi {
     }
 
     @OptIn(ExperimentalTime::class)
+    private suspend fun fetchLoginInfo(): Info {
+        return client.get("https://lms.ssu.ac.kr/api/v1/users/${lmsId}") {
+        }.body<Info>()
+    }
+
+    @OptIn(ExperimentalTime::class)
     private suspend fun fetchLearnStatuses(term: Term): LearnStatuses {
         return client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/learnstatus?term_ids=${term.id}&type=subsection") {
             headers { append("Authorization", "Bearer $apiBearerToken") }
@@ -254,6 +260,12 @@ object LmsApi {
     suspend fun getTerms(): List<Term> {
         checkLoggedIn()
         return fetchTerms()
+    }
+
+    suspend fun getLoginInfo(): Info {
+        checkLoggedIn()
+
+        return fetchLoginInfo()
     }
 
     /**

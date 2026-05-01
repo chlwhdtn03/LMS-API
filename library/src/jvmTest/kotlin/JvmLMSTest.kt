@@ -1,5 +1,6 @@
 package io.github.kotlin.fibonacci
 
+import io.github.chlwhdtn03.LmsApi.getLoginInfo
 import io.github.chlwhdtn03.LmsApi.getSubjects
 import io.github.chlwhdtn03.LmsApi.getTerms
 import io.github.chlwhdtn03.LmsApi.isLoggined
@@ -9,8 +10,8 @@ import kotlin.test.Test
 import kotlin.time.ExperimentalTime
 import kotlin.time.measureTimedValue
 
-private const val LMS_TEST_ID = "20222908"
-private const val LMS_TEST_PASSWORD = "if(login==6)"
+private const val LMS_TEST_ID = ""
+private const val LMS_TEST_PASSWORD = ""
 
 class JvmLMSTest {
 
@@ -27,6 +28,7 @@ class JvmLMSTest {
         println("로그인 성공 여부 : $isLoggined")
         val terms = getTerms()
         println(terms[0].name)
+        println(getLoginInfo())
 
         val (subjects, timeTaken) = measureTimedValue {
             getSubjects(terms[0], {
