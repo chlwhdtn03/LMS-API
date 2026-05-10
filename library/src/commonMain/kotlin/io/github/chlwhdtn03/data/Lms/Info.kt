@@ -1,4 +1,4 @@
-package io.github.chlwhdtn03.data
+package io.github.chlwhdtn03.data.Lms
 
 import kotlinx.serialization.Serializable
 

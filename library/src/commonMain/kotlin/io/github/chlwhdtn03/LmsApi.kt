@@ -1,6 +1,6 @@
 package io.github.chlwhdtn03
 
-import io.github.chlwhdtn03.data.*
+import io.github.chlwhdtn03.data.Lms.*
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.contentnegotiation.*
@@ -13,6 +13,19 @@ import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.json.Json
 import kotlin.time.ExperimentalTime
 
+internal val client = HttpClient() {
+    install(HttpCookies)
+    install(ContentNegotiation) {
+        json(Json {
+            ignoreUnknownKeys = true
+            prettyPrint = true
+            isLenient = true
+            coerceInputValues = true
+        })
+    }
+    followRedirects = true
+}
+
 object LmsApi {
     private const val LMS_LOGIN_URL = "https://smartid.ssu.ac.kr/Symtra_sso/smln_pcs.asp"
     private const val LMS_CERT_URL = "https://lms.ssu.ac.kr/xn-sso/gw-cb.php"
@@ -21,19 +34,6 @@ object LmsApi {
     var isLoggined = false
     private var lmsId = ""
     private var apiBearerToken = ""
-
-    private val client = HttpClient() {
-        install(HttpCookies)
-        install(ContentNegotiation) {
-            json(Json {
-                ignoreUnknownKeys = true
-                prettyPrint = true
-                isLenient = true
-                coerceInputValues = true
-            })
-        }
-        followRedirects = true
-    }
 
     private data class AssignmentMetadata(
         val groupName: String,
