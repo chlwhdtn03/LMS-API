@@ -154,13 +154,14 @@ object LmsApi {
     ): List<ScoredAssignment> {
         val result = mutableListOf<ScoredAssignment>()
         for (submission in submissions) {
-            if (!(submission.score > Double.NEGATIVE_INFINITY)) continue
+            if(submission.score != null)
+                if (!(submission.score > Double.NEGATIVE_INFINITY)) continue
 
             val metadata = assignmentMetadataById[submission.assignment_id]
             result += ScoredAssignment(
                 groupName = metadata?.groupName ?: "알 수 없음",
                 name = metadata?.name ?: "알 수 없음",
-                score = submission.score,
+                score = submission.score ?: 0.0,
                 maxScore = metadata?.maxScore ?: 0.0,
             )
         }

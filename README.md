@@ -1,111 +1,172 @@
 # LMS-API
 
-숭실대학교 LMS(Canvas, LearningX)에서 학기, 강의, 할 일, 출석, 공지, 점수 정보를 가져오기 위한 Kotlin Multiplatform 라이브러리입니다.
+숭실대학교 LMS(Canvas, LearningX)에서 학기, 강의, 할 일, 출석, 공지, 제출, 점수 정보를 가져오기 위한 Kotlin Multiplatform 라이브러리입니다.
 
-현재 코드 기준 지원 타깃은 다음과 같습니다.
+> SSU-Time에서 iOS로 연동하려면 여기부터 보면 됩니다: [SSU-Time iOS Quick Start](#ssu-time-ios-quick-start)
+
+이 README의 iOS 문서는 **Swift Package Manager(SPM)로 연결하거나 `LmsApi.xcframework` 파일을 Xcode 프로젝트에 직접 추가해서 사용하는 방식**을 기준으로 작성되어 있습니다. SPM도 내부적으로는 GitHub Release에 올라간 `LmsApi.xcframework.zip`을 받는 구조입니다.
+
+## 지원 플랫폼
 
 - Android
-- iOS (`iosX64`, `iosArm64`, `iosSimulatorArm64`)
+- JVM
+- iOS device: `iosArm64`
+- iOS simulator: `iosX64`, `iosSimulatorArm64`
+- macOS Apple Silicon: `macosArm64`
 
-iOS는 Kotlin/Native 프레임워크로도 빌드할 수 있습니다. 즉 Xcode에서 직접 붙여서 사용할 수는 있지만, 이 라이브러리가 순수 Swift 소스로 자동 변환되는 것은 아닙니다.
+## iOS에서 SPM으로 연결하기
 
-## 1. 설치 방법
+iOS 앱 프로젝트에서는 Xcode의 Swift Package Manager로 이 라이브러리를 추가할 수 있습니다.
 
-### Maven Central로 추가
+### 1. Xcode에서 Package 추가
 
-`library/build.gradle.kts` 기준 publish 좌표는 아래와 같습니다.
+1. Xcode에서 앱 프로젝트를 엽니다.
+2. 상단 메뉴에서 `File > Add Package Dependencies...`를 선택합니다.
+3. 검색창에 이 저장소 URL을 입력합니다.
 
-- Group: `io.github.chlwhdtn03`
-- Artifact: `lms`
-- Version: `1.2.0`
-
-프로젝트에 `mavenCentral()`이 포함되어 있어야 합니다.
-
-```kotlin
-repositories {
-    mavenCentral()
-    google()
-}
+```text
+https://github.com/chlwhdtn03/LMS-API
 ```
 
-KMP 프로젝트라면 보통 `commonMain`에 추가하면 됩니다.
+4. Dependency Rule에서 사용할 버전을 선택합니다.
+   - 태그를 `1.2.4`로 배포했다면 `Exact Version` 또는 `Up to Next Major Version`에 `1.2.4`를 지정합니다.
+5. Package Product 목록에서 `LmsApi`를 선택합니다.
+6. 앱 target에 `LmsApi`가 추가되는지 확인합니다.
 
-```kotlin
-kotlin {
-    sourceSets {
-        commonMain.dependencies {
-            implementation("io.github.chlwhdtn03:lms:1.2.0")
-        }
-    }
-}
+Swift 파일에서는 다음처럼 import 합니다.
+
+```swift
+import LmsApi
 ```
 
-Android 전용 모듈에서만 사용할 경우에는 일반 `dependencies` 블록에서도 사용할 수 있습니다.
+이후 사용 코드는 [SSU-Time iOS Quick Start](#ssu-time-ios-quick-start)의 Swift 예제를 그대로 사용하면 됩니다.
 
-```kotlin
-dependencies {
-    implementation("io.github.chlwhdtn03:lms:1.2.0")
-}
+### 2. SPM 연결이 되기 위한 배포 조건
+
+이 저장소의 루트에는 SPM이 읽는 `Package.swift`가 있어야 합니다. 현재 구조는 Kotlin/Native로 만든 XCFramework를 SPM binary target으로 감싸는 방식입니다.
+
+```swift
+// swift-tools-version:5.9
+import PackageDescription
+
+let package = Package(
+    name: "LmsApi",
+    platforms: [
+        .iOS(.v14),
+    ],
+    products: [
+        .library(name: "LmsApi", targets: ["LmsApi"])
+    ],
+    targets: [
+        .binaryTarget(
+            name: "LmsApi",
+            url: "https://github.com/chlwhdtn03/LMS-API/releases/download/1.2.4/LmsApi.xcframework.zip",
+            checksum: "<checksum calculated for the ZIP file>"
+        )
+    ]
+)
 ```
 
-### 같은 멀티모듈 프로젝트에서 로컬 모듈로 붙이기
+SPM 배포가 정상 동작하려면 아래 값들이 서로 맞아야 합니다.
 
-이 저장소처럼 `:library` 모듈을 직접 포함해서 사용할 수도 있습니다.
+- GitHub Release 태그: `1.2.4`
+- Release asset 파일명: `LmsApi.xcframework.zip`
+- `Package.swift`의 URL: `https://github.com/chlwhdtn03/LMS-API/releases/download/1.2.4/LmsApi.xcframework.zip`
+- `Package.swift`의 checksum: 실제 `LmsApi.xcframework.zip`으로 계산한 값
 
-```kotlin
-dependencies {
-    implementation(project(":library"))
-}
-```
-
-### Xcode에서 직접 쓰기 (`XCFramework`)
-
-이 프로젝트는 iOS용 `XCFramework` 산출도 지원합니다.
+checksum은 zip 파일을 만든 뒤 아래 명령으로 계산합니다.
 
 ```bash
-./gradlew :library:assembleLmsApiXCFramework
+swift package compute-checksum LmsApi.xcframework.zip
 ```
 
-빌드가 끝나면 아래 경로에 산출물이 생성됩니다.
+### 3. SPM 배포 순서
+
+라이브러리 제공자는 릴리스할 때 아래 순서로 진행합니다.
+
+1. `./gradlew :library:assembleLmsApiReleaseXCFramework` 실행
+2. 산출된 `LmsApi.xcframework`를 `LmsApi.xcframework.zip`으로 압축
+3. `swift package compute-checksum LmsApi.xcframework.zip` 실행
+4. `Package.swift`의 checksum 갱신
+5. `Package.swift`를 커밋
+6. `1.2.4` Git tag 생성
+7. GitHub Release `1.2.4` 생성
+8. Release asset으로 `LmsApi.xcframework.zip` 업로드
+
+한 번 배포한 `LmsApi.xcframework.zip`은 같은 태그에서 교체하지 않는 것을 권장합니다. 파일 내용이 바뀌면 checksum도 바뀌어서 기존 SPM 설치가 실패할 수 있습니다.
+
+## iOS에서 XCFramework 직접 추가하기
+
+### 1. XCFramework 준비
+
+라이브러리 제공자는 아래 Gradle task로 iOS용 XCFramework를 만들 수 있습니다.
+
+```bash
+./gradlew :library:assembleLmsApiReleaseXCFramework
+```
+
+빌드 결과는 아래 경로에 생성됩니다.
 
 ```text
 library/build/XCFrameworks/release/LmsApi.xcframework
 ```
 
-이 파일을 Xcode 프로젝트에 추가하면 Swift에서 프레임워크 형태로 사용할 수 있습니다.
+파일로 전달할 때는 보통 `LmsApi.xcframework`를 압축해서 전달하고, iOS 프로젝트에서는 압축을 푼 뒤 Xcode에 추가합니다.
 
-- 이 방식은 "Swift 네이티브 라이브러리"가 아니라 Kotlin/Native가 만든 Apple 프레임워크입니다.
-- 즉 Xcode에서 import 해서 쓰는 것은 가능하지만, 내부 구현은 여전히 Kotlin입니다.
-- 순수 Swift Package나 Swift 소스 라이브러리가 필요하다면 별도 Swift 구현이나 Swift 래퍼 타깃을 만들어야 합니다.
+### 2. Xcode 프로젝트에 추가
 
-Xcode에 붙일 때는 보통 아래 순서로 진행하면 됩니다.
+1. `LmsApi.xcframework`를 Xcode 프로젝트 Navigator로 드래그합니다.
+2. 필요한 앱 target이 선택되어 있는지 확인합니다.
+3. `Copy items if needed`를 체크합니다.
+4. 앱 target의 `General > Frameworks, Libraries, and Embedded Content`에 `LmsApi.xcframework`가 들어갔는지 확인합니다.
+5. 현재 프레임워크는 static framework로 빌드되므로 Embed 설정은 보통 `Do Not Embed`를 사용합니다.
 
-1. `LmsApi.xcframework`를 Xcode 프로젝트로 드래그해서 추가
-2. 타깃의 `Frameworks, Libraries, and Embedded Content`에 `LmsApi.xcframework` 연결 확인
-3. 현재 빌드 설정은 `isStatic = true` 이므로 Embed 옵션은 `Do Not Embed` 사용
+Swift 파일에서는 다음처럼 import 합니다.
 
-아래는 iOS 앱에서 `XCFramework`를 직접 사용할 때의 Swift 예제입니다. Kotlin의 `suspend` 함수는 Apple 쪽에서 completion handler 형태로 노출되므로, 앱에서 한 번 `async/await` 래퍼를 만들어 두면 쓰기 편합니다.
+```swift
+import LmsApi
+```
+
+## SSU-Time iOS Quick Start
+
+SSU-Time에서는 전체 과목 상세 정보가 아니라 시간표와 할 일 중심 데이터가 필요합니다. 그래서 iOS에서는 아래 순서로 호출하면 됩니다.
+
+```text
+loginLMS(id, password)
+getTerms()
+getTodoList(term)
+```
+
+중요한 점은 **SSU-Time에서는 `getSubjects()`가 아니라 `getTodoList()`를 사용한다는 것**입니다.
+
+### 바로 붙여 쓸 수 있는 Swift 래퍼
+
+Kotlin의 `suspend` 함수는 Swift에서 completion handler 형태로 노출됩니다. iOS 앱에서는 아래처럼 `async/await` 래퍼를 하나 만들어 두면 편합니다.
 
 ```swift
 import Foundation
 import LmsApi
 
-enum LMSXCFrameworkError: Error {
+enum SSUTimeLMSClientError: Error {
     case loginFailed
     case noTerms
 }
 
-enum LMSXCFrameworkClient {
-    static func login(id: String, password: String) async throws -> Bool {
-        try await withCheckedThrowingContinuation { continuation in
-            LmsApi.shared.loginLMS(id: id, password: password) { success, error in
+enum SSUTimeLMSClient {
+    static func login(id: String, password: String) async throws {
+        let success: Bool = try await withCheckedThrowingContinuation { continuation in
+            LmsApi.shared.loginLMS(id: id, password: password) { result, error in
                 if let error {
                     continuation.resume(throwing: error)
                     return
                 }
 
-                continuation.resume(returning: success?.boolValue == true)
+                continuation.resume(returning: result?.boolValue == true)
             }
+        }
+
+        if !success {
+            throw SSUTimeLMSClientError.loginFailed
         }
     }
 
@@ -122,12 +183,12 @@ enum LMSXCFrameworkClient {
         }
     }
 
-    static func getSubjects(
+    static func getTodoList(
         term: Term,
         onProgress: @escaping (Float) -> Void = { _ in }
     ) async throws -> [Subject] {
         try await withCheckedThrowingContinuation { continuation in
-            LmsApi.shared.getSubjects(term: term, loadingState: { progress in
+            LmsApi.shared.getTodoList(term: term, loadingState: { progress in
                 onProgress(progress.floatValue)
             }) { subjects, error in
                 if let error {
@@ -139,171 +200,320 @@ enum LMSXCFrameworkClient {
             }
         }
     }
-}
 
-func loadLmsFromXcframework() {
+    static func loadTodoSubjects(
+        id: String,
+        password: String,
+        selectTerm: ([Term]) -> Term? = { $0.last },
+        onProgress: @escaping (Float) -> Void = { _ in }
+    ) async throws -> [Subject] {
+        try await login(id: id, password: password)
+
+        let terms = try await getTerms()
+        guard let term = selectTerm(terms) else {
+            throw SSUTimeLMSClientError.noTerms
+        }
+
+        return try await getTodoList(term: term, onProgress: onProgress)
+    }
+}
+```
+
+### 가장 작은 사용 예제
+
+```swift
+func loadSSUTimeTodos() {
     Task {
         do {
-            let loggedIn = try await LMSXCFrameworkClient.login(
-                id: "20222908",
+            let subjects = try await SSUTimeLMSClient.loadTodoSubjects(
+                id: "학번",
                 password: "비밀번호"
-            )
-
-            guard loggedIn else {
-                throw LMSXCFrameworkError.loginFailed
-            }
-
-            let terms = try await LMSXCFrameworkClient.getTerms()
-            guard let selectedTerm = terms.last else {
-                throw LMSXCFrameworkError.noTerms
-            }
-
-            print("선택한 학기: \(selectedTerm.name ?? "이름 없음")")
-
-            let subjects = try await LMSXCFrameworkClient.getSubjects(
-                term: selectedTerm
             ) { progress in
-                print("불러오는 중: \(Int(progress * 100))%")
+                print("loading: \(Int(progress * 100))%")
             }
 
             for subject in subjects {
-                print("과목명: \(subject.name)")
-                print("교수명: \(subject.professor)")
-                print("할 일 개수: \(subject.todoList.count)")
+                print("과목: \(subject.name)")
 
-                if let firstTodo = subject.todoList.first {
-                    print("첫 과제: \(firstTodo.title)")
+                for todo in subject.todoList {
+                    print("- \(todo.title)")
+                    print("  type: \(todo.component_type)")
+                    print("  due: \(todo.due_date)")
                 }
             }
         } catch {
-            print("LMS 조회 실패: \(error)")
+            print("SSU-Time LMS load failed: \(error)")
         }
     }
 }
 ```
 
-추가로 알아둘 점:
+### Swift에서 쓰기 편한 Todo 모델로 변환하기
 
-- Kotlin의 `object LmsApi`는 Swift에서 `LmsApi.shared` 싱글톤으로 보입니다.
-- 반환 모델도 Swift에서 그대로 접근할 수 있어서 `subject.name`, `subject.todoList`, `firstTodo.title`처럼 사용하면 됩니다.
-- 현재 API는 Kotlin 예외를 iOS 친화적인 형태로 모두 감싸서 내려주지는 않으므로, 실서비스에서는 iOS 전용 래퍼나 Kotlin 쪽 Result 래퍼 API를 하나 더 두는 것을 권장합니다.
+`getTodoList()`의 반환 타입은 `[Subject]`입니다. SSU-Time 화면에서는 과목별 `todoList`를 평평한 배열로 바꿔 쓰는 편이 편할 수 있습니다.
 
-## 2. 기본 사용 순서
+```swift
+import Foundation
+import LmsApi
 
-이 라이브러리의 사용 순서는 고정되어 있습니다.
+struct SSUTimeTodoItem: Identifiable {
+    let id: String
+    let courseId: Int32
+    let courseName: String
+    let professor: String
+    let title: String
+    let componentType: String
+    let assignmentId: Int?
+    let dueDate: String
+}
 
-1. `LmsApi.loginLMS(id, password)`로 로그인
-2. `LmsApi.getTerms()`로 학기 목록 조회
-3. `LmsApi.getSubjects(term)`로 특정 학기의 강의 정보 조회
+extension Subject {
+    func toSSUTimeTodoItems() -> [SSUTimeTodoItem] {
+        todoList.map { todo in
+            let assignmentId = todo.assignment_id.map { Int($0.intValue) }
+            let itemId = [
+                String(id),
+                todo.component_type,
+                String(assignmentId ?? -1),
+                todo.title,
+                todo.due_date
+            ].joined(separator: "-")
 
-`LmsApi.getTerms()`와 `LmsApi.getSubjects()`는 로그인 전에 호출하면 `IllegalStateException`이 발생합니다.
+            return SSUTimeTodoItem(
+                id: itemId,
+                courseId: id,
+                courseName: name,
+                professor: professor,
+                title: todo.title,
+                componentType: todo.component_type,
+                assignmentId: assignmentId,
+                dueDate: todo.due_date
+            )
+        }
+    }
+}
 
-또한 공개 API는 모두 네트워크 호출을 포함하므로 `suspend` 함수이며, 코루틴 안에서 호출해야 합니다.
+extension Array where Element == Subject {
+    func toSSUTimeTodoItems() -> [SSUTimeTodoItem] {
+        flatMap { $0.toSSUTimeTodoItems() }
+    }
+}
+```
 
-## 3. 공개 함수 설명
+사용 예시는 다음과 같습니다.
 
-일반적인 앱 코드에서는 `LmsApi` 싱글톤을 통해 접근합니다. 로그인 세션, 쿠키, API 토큰은 `LmsApi` 내부에 보관되므로 같은 프로세스 안에서는 이후 호출이 같은 세션을 사용합니다.
+```swift
+func loadFlatTodos() {
+    Task {
+        do {
+            let subjects = try await SSUTimeLMSClient.loadTodoSubjects(
+                id: "학번",
+                password: "비밀번호"
+            )
 
-대부분의 앱에서는 사실상 `LmsApi.loginLMS`, `LmsApi.getTerms`, `LmsApi.getSubjects` 세 함수만 사용하면 됩니다.
+            let todos = subjects.toSSUTimeTodoItems()
+
+            for todo in todos {
+                print("[\(todo.courseName)] \(todo.title) / \(todo.dueDate)")
+            }
+        } catch {
+            print(error)
+        }
+    }
+}
+```
+
+### SwiftUI ViewModel 예제
+
+```swift
+import Foundation
+import LmsApi
+
+@MainActor
+final class SSUTimeTodoViewModel: ObservableObject {
+    @Published private(set) var subjects: [Subject] = []
+    @Published private(set) var todos: [SSUTimeTodoItem] = []
+    @Published private(set) var progress: Float = 0
+    @Published private(set) var isLoading = false
+    @Published var errorMessage: String?
+
+    func load(id: String, password: String) {
+        isLoading = true
+        progress = 0
+        errorMessage = nil
+
+        Task {
+            do {
+                let loadedSubjects = try await SSUTimeLMSClient.loadTodoSubjects(
+                    id: id,
+                    password: password
+                ) { [weak self] progress in
+                    Task { @MainActor in
+                        self?.progress = progress
+                    }
+                }
+
+                subjects = loadedSubjects
+                todos = loadedSubjects.toSSUTimeTodoItems()
+                isLoading = false
+            } catch {
+                errorMessage = String(describing: error)
+                isLoading = false
+            }
+        }
+    }
+}
+```
+
+## SSU-Time에서 받는 데이터
+
+`getTodoList(term)`는 `List<Subject>`를 Swift에서는 `[Subject]`로 반환합니다.
+
+SSU-Time에서 주로 쓰는 필드는 다음과 같습니다.
+
+### `Subject`
+
+```swift
+subject.id              // 과목 ID
+subject.termId          // 학기 ID
+subject.termName        // 학기명
+subject.name            // 과목명
+subject.professor       // 교수명
+subject.totalStudents   // 수강 인원
+subject.todoList        // 할 일 목록
+subject.submissions     // 제출 정보
+```
+
+### `TodoList`
+
+```swift
+todo.title              // 할 일 제목
+todo.component_type     // assignment, commons 등
+todo.assignment_id      // 과제 ID, 없을 수 있음
+todo.due_date           // 마감 시각 문자열
+```
+
+`getTodoList(term)`는 빠른 조회를 위해 아래 필드는 빈 목록으로 반환합니다.
+
+```swift
+subject.attendances
+subject.discussions
+subject.scoredAssignments
+```
+
+출석, 공지, 점수까지 모두 필요한 화면에서는 `getSubjects(term)`를 사용해야 합니다. SSU-Time의 할 일 중심 연동에는 `getTodoList(term)`를 권장합니다.
+
+## 일반 Kotlin 사용법
+
+KMP 또는 Android에서는 Gradle 의존성으로 사용할 수 있습니다.
+
+```kotlin
+dependencies {
+    implementation("io.github.chlwhdtn03:lms:1.2.4")
+}
+```
+
+KMP 프로젝트에서는 보통 `commonMain`에 추가합니다.
+
+```kotlin
+kotlin {
+    sourceSets {
+        commonMain.dependencies {
+            implementation("io.github.chlwhdtn03:lms:1.2.4")
+        }
+    }
+}
+```
+
+기본 흐름은 iOS와 같습니다.
+
+```kotlin
+import io.github.chlwhdtn03.LmsApi
+import kotlin.time.ExperimentalTime
+
+@OptIn(ExperimentalTime::class)
+suspend fun loadTodosForKotlin() {
+    LmsApi.loginLMS(
+        id = "학번",
+        password = "비밀번호"
+    )
+
+    val term = LmsApi.getTerms().lastOrNull()
+        ?: error("조회 가능한 학기가 없습니다.")
+
+    val subjects = LmsApi.getTodoList(term) { progress ->
+        println("loading: ${(progress * 100).toInt()}%")
+    }
+
+    subjects.forEach { subject ->
+        subject.todoList.forEach { todo ->
+            println("[${subject.name}] ${todo.title} / ${todo.due_date}")
+        }
+    }
+}
+```
+
+## 공개 API
 
 ### `LmsApi.loginLMS`
 
 ```kotlin
-object LmsApi {
-    suspend fun loginLMS(id: String, password: String): Boolean
-}
+suspend fun loginLMS(id: String, password: String): Boolean
 ```
 
-LMS 아이디와 비밀번호로 로그인합니다.
-
-- 성공 시 `true`를 반환합니다.
-- 아이디 또는 비밀번호가 틀리면 `IllegalArgumentException`이 발생할 수 있습니다.
-- 내부적으로 쿠키와 토큰을 보관하므로, 이후 `LmsApi.getTerms()`와 `LmsApi.getSubjects()`가 같은 세션을 사용합니다.
+LMS 아이디와 비밀번호로 로그인합니다. 로그인에 성공하면 이후 호출에서 같은 세션과 API 토큰을 사용합니다.
 
 ### `LmsApi.getTerms`
 
 ```kotlin
-object LmsApi {
-    @OptIn(ExperimentalTime::class)
-    suspend fun getTerms(): List<Term>
-}
+@OptIn(ExperimentalTime::class)
+suspend fun getTerms(): List<Term>
 ```
 
 로그인한 사용자의 학기 목록을 가져옵니다.
 
-`Term`의 핵심 필드는 다음과 같습니다.
+### `LmsApi.getTodoList`
+
+```kotlin
+@ExperimentalTime
+suspend fun getTodoList(
+    term: Term,
+    loadingState: (Float) -> Unit = {}
+): List<Subject>
+```
+
+과목 기본 정보, 할 일 목록, 제출 정보를 빠르게 가져옵니다. SSU-Time 연동에서 권장하는 API입니다.
+
+### `LmsApi.getSubjects`
+
+```kotlin
+@ExperimentalTime
+suspend fun getSubjects(
+    term: Term,
+    loadingState: (Float) -> Unit = {}
+): List<Subject>
+```
+
+과목 기본 정보, 할 일, 출석, 공지, 제출, 점수 정보를 모두 가져옵니다. 더 많은 API를 호출하므로 `getTodoList`보다 무겁습니다.
+
+### `LmsApi.getLoginInfo`
+
+```kotlin
+suspend fun getLoginInfo(): Info
+```
+
+로그인한 사용자의 이름, 학과, 로그인 ID, 이메일 정보를 가져옵니다.
+
+## 주요 모델
+
+### `Term`
 
 - `id`: 학기 ID
 - `name`: 학기명
 - `start_at`: 시작 시각
 - `end_at`: 종료 시각
 
-### `LmsApi.getSubjects`
-
-```kotlin
-object LmsApi {
-    @OptIn(ExperimentalTime::class)
-    suspend fun getSubjects(
-        term: Term,
-        loadingState: (Float) -> Unit = {}
-    ): List<Subject>
-}
-```
-
-선택한 학기의 강의 목록을 가져옵니다. 한 강의 안에 아래 정보가 함께 들어 있습니다.
-
-- 과목 기본 정보
-- 할 일 목록
-- 주차별 출석 상태
-- 공지사항
-- 점수 정보
-
-`loadingState` 콜백에는 `0.0f ~ 1.0f` 범위의 진행률이 전달됩니다.
-
-### `LmsApi.getTodoList`
-
-```kotlin
-object LmsApi {
-    @OptIn(ExperimentalTime::class)
-    suspend fun getTodoList(
-        term: Term,
-        loadingState: (Float) -> Unit = {}
-    ): List<Subject>
-}
-```
-
-제출해야 할 과제와 동영상 시청 정보 중심으로 빠르게 가져옵니다.
-
-- `todoList`와 `submissions`는 채워집니다.
-- 출석, 공지, 점수 정보는 가져오지 않으므로 `attendances`, `discussions`, `scoredAssignments`는 빈 목록입니다.
-
-### `normalizePem`
-
-```kotlin
-fun normalizePem(raw: String): String
-```
-
-로그인 복호화 과정에서 PEM 문자열 형식을 정리하는 보조 함수입니다.
-
-- 일반 사용자가 직접 호출할 일은 거의 없습니다.
-- 디버깅이나 플랫폼별 RSA 처리 코드를 확장할 때만 참고하면 됩니다.
-
-### `pemToString`
-
-```kotlin
-expect fun pemToString(rawPem: String, rawPw: String): String
-```
-
-플랫폼별 RSA 복호화를 수행하는 내부용 함수입니다.
-
-- Android와 iOS에서 각각 `actual` 구현이 제공됩니다.
-- 보통은 `LmsApi.loginLMS()` 내부에서 자동으로 사용되므로 직접 호출하지 않아도 됩니다.
-
-## 4. 주요 반환 모델
-
 ### `Subject`
-
-`LmsApi.getSubjects()`가 반환하는 핵심 모델입니다.
 
 - `id`: 과목 ID
 - `termId`: 학기 ID
@@ -315,171 +525,32 @@ expect fun pemToString(rawPem: String, rawPw: String): String
 - `attendances`: 주차별 출석 정보
 - `discussions`: 공지 목록
 - `submissions`: 제출 정보 목록
-- `scoredAssignments`: 과제/시험 점수 목록
+- `scoredAssignments`: 점수 정보 목록
 
-`submissions`와 `scoredAssignments`는 목적이 다릅니다. `submissions`는 내가 제출했거나 제출 상태를 확인할 수 있는 원본 제출 정보에 가깝고, `scoredAssignments`는 그중 점수가 부여된 항목을 화면에 바로 보여주기 좋게 과제명, 평가 그룹명, 만점 정보와 함께 정리한 목록입니다.
+### `TodoList`
+
+- `component_type`: 항목 타입. 예: `assignment`, `commons`
+- `assignment_id`: 과제 ID
+- `title`: 제목
+- `due_date`: 마감 시각
 
 ### `Submission`
-
-제출 정보 한 건을 의미합니다.
 
 - `assignment_id`: 과제 ID
 - `attachments`: 제출 파일 목록
 - `attempt`: 제출 횟수
-- `cached_due_date`: LMS 캐시 상 마감 시각
+- `cached_due_date`: LMS 캐시 기준 마감 시각
 - `late`: 지각 제출 여부
 - `preview_url`: 제출 파일 미리보기 주소
 - `submitted_at`: 제출 시각
 - `submission_type`: 제출 방식
 - `score`: 받은 점수
 
-점수가 아직 없는 제출 정보는 `score`가 `Double.NEGATIVE_INFINITY`로 들어갑니다. 점수만 필요하다면 직접 분기하기보다 `scoredAssignments`를 사용하는 편이 편합니다.
+## 주의사항
 
-### `TodoList`
-
-할 일 한 건을 의미합니다.
-
-- `component_type`: 항목 타입, 예: `assignment`, `commons`
-- `assignment_id`: 과제 ID
-- `title`: 제목
-- `due_date`: 마감 시각
-
-### `AttendanceType`
-
-출석 상태는 enum 으로 제공됩니다.
-
-- `AttendanceType.ATTENDANCE`
-- `AttendanceType.ABSENT`
-- `AttendanceType.LATE`
-- `AttendanceType.NONE`
-
-한글 값은 `kor` 프로퍼티로 확인할 수 있습니다.
-
-```kotlin
-val text = AttendanceType.ATTENDANCE.kor // "출석"
-```
-
-### `ScoredAssignment`
-
-점수 정보는 아래 형태로 들어옵니다.
-
-- `groupName`: 평가 항목 그룹명, 예: 과제 / 퀴즈 / 기말고사
-- `name`: 과제 또는 시험 이름
-- `score`: 내가 받은 점수
-- `maxScore`: 만점
-
-## 5. 전체 예제 코드
-
-아래 예제는 로그인부터 학기 선택, 과목 조회, 과제/공지/점수 출력까지 한 번에 보여줍니다.
-
-```kotlin
-import io.github.chlwhdtn03.LmsApi
-import kotlin.time.ExperimentalTime
-
-@OptIn(ExperimentalTime::class)
-suspend fun loadLmsExample() {
-    val loginSuccess = LmsApi.loginLMS(
-        id = "20222908",
-        password = "비밀번호"
-    )
-
-    if (!loginSuccess) return
-
-    val terms = LmsApi.getTerms()
-    val selectedTerm = terms.lastOrNull()
-        ?: error("조회 가능한 학기가 없습니다.")
-
-    println("선택한 학기: ${selectedTerm.name}")
-
-    val subjects = LmsApi.getSubjects(selectedTerm) { progress ->
-        println("불러오는 중: ${(progress * 100).toInt()}%")
-    }
-
-    subjects.forEach { subject ->
-        println("과목명: ${subject.name}")
-        println("교수명: ${subject.professor}")
-        println("수강인원: ${subject.totalStudents}")
-
-        println("[할 일]")
-        subject.todoList.forEach { todo ->
-            println("- ${todo.title} / ${todo.component_type} / 마감: ${todo.due_date}")
-        }
-
-        println("[출석]")
-        subject.attendances.forEachIndexed { weekIndex, weekAttendances ->
-            val attendanceText = weekAttendances.joinToString { it.kor }
-            println("- ${weekIndex + 1}주차: $attendanceText")
-        }
-
-        println("[공지]")
-        subject.discussions.forEach { discussion ->
-            println("- ${discussion.title} / 작성자: ${discussion.user_name}")
-        }
-
-        println("[제출]")
-        subject.submissions.forEach { submission ->
-            println("- 과제 ID ${submission.assignment_id} / 제출 시각: ${submission.submitted_at}")
-        }
-
-        println("[점수]")
-        subject.scoredAssignments.forEach { score ->
-            println("- [${score.groupName}] ${score.name}: ${score.score}/${score.maxScore}")
-        }
-
-        println()
-    }
-}
-```
-
-## 6. Android ViewModel 예제
-
-Android 앱에서 사용할 때는 보통 `viewModelScope.launch` 안에서 호출하면 됩니다.
-
-```kotlin
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
-import io.github.chlwhdtn03.LmsApi
-import kotlinx.coroutines.launch
-import kotlin.time.ExperimentalTime
-
-class LmsViewModel : ViewModel() {
-
-    @OptIn(ExperimentalTime::class)
-    fun load(id: String, password: String) {
-        viewModelScope.launch {
-            LmsApi.loginLMS(id, password)
-
-            val term = LmsApi.getTerms().lastOrNull() ?: return@launch
-            val subjects = LmsApi.getSubjects(term) { progress ->
-                println("progress = $progress")
-            }
-
-            subjects.forEach {
-                println(it.name)
-            }
-        }
-    }
-}
-```
-
-## 7. 사용 시 주의사항
-
-- `LmsApi.getTerms()`와 `LmsApi.getSubjects()`는 반드시 로그인 이후에 호출해야 합니다.
-- 공개 함수는 모두 네트워크 요청을 수행하므로 메인 스레드를 직접 막지 않도록 코루틴에서 사용해야 합니다.
-- `Term`과 관련 함수는 `kotlin.time.ExperimentalTime` opt-in 이 필요합니다.
-- 내부 상태로 로그인 세션을 유지하므로, 앱 시작 후 한 번 로그인하고 같은 프로세스에서 이어서 사용하는 방식이 자연스럽습니다.
-- 로그인 과정에서 사이트 구조가 바뀌면 동작이 깨질 수 있으므로, LMS 로그인 페이지 변경에 민감합니다.
-
-## 8. 가장 자주 쓰는 패턴
-
-실제 사용에서는 아래 흐름만 기억하면 됩니다.
-
-```kotlin
-@OptIn(ExperimentalTime::class)
-suspend fun simpleFlow() {
-    LmsApi.loginLMS("학번", "비밀번호")
-    val term = LmsApi.getTerms().last()
-    val subjects = LmsApi.getSubjects(term)
-    println(subjects.map { it.name })
-}
-```
+- `getTerms`, `getTodoList`, `getSubjects`, `getLoginInfo`는 반드시 `loginLMS` 이후에 호출해야 합니다.
+- iOS에서는 Kotlin `object LmsApi`가 Swift의 `LmsApi.shared`로 보입니다.
+- iOS에서는 Kotlin `suspend` 함수가 completion handler 형태로 노출됩니다.
+- 이 라이브러리는 Swift로 작성된 라이브러리가 아니라 Kotlin/Native가 만든 XCFramework입니다.
+- 숭실대학교 LMS 로그인 페이지나 LearningX API 구조가 바뀌면 동작이 깨질 수 있습니다.
+- 이미 로그인한 세션과 토큰은 `LmsApi` 내부 상태로 유지됩니다.
