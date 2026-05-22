@@ -1,0 +1,15 @@
+package io.github.chlwhdtn03.data.Lms
+
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class TodoList(
+    val section_id: Int = -1,
+    val unit_id: Int = -1,
+    val component_id: Int = -1,
+    val generated_from_lecture_content: Boolean,
+    val component_type: String, // commons : 동영상 , assignment : 과제
+    val assignment_id: Int? = -1,
+    val title: String,
+    val due_date: String = "",
+)

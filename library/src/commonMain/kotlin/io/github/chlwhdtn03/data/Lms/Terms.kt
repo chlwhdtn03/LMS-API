@@ -2,13 +2,9 @@ package io.github.chlwhdtn03.data.Lms
 
 import kotlinx.serialization.Serializable
 import kotlin.time.ExperimentalTime
-import kotlin.time.Instant
 
 @Serializable
 @ExperimentalTime
-data class Term(
-    val id: Int? = -1,
-    val name: String? = null,
-    val start_at: Instant?,
-    val end_at: Instant?,
+data class Terms(
+    val enrollment_terms: List<Term>
 )

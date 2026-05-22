@@ -78,7 +78,7 @@ object LmsApi {
     private suspend fun fetchTodos(term: Term): Todos {
         return client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/to_dos?term_ids[]=${term.id}") {
             headers { append("Authorization", "Bearer $apiBearerToken") }
-        }.body<Todos>()
+        }.apply { println(bodyAsText()) }.body<Todos>()
     }
 
     private suspend fun fetchAssignmentGroups(courseId: Int): List<AssignmentGroup> {

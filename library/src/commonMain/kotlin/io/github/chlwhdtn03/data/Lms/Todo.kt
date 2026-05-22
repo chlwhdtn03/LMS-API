@@ -39,36 +39,3 @@ data class Todo(
     val activities: Activity,
     val todo_list: List<TodoList>,
 )
-
-@Serializable
-data class Activity(
-    val total_unread_announcements: Int,
-    val total_announcements: Int,
-    val total_unread_resources: Int,
-    val total_resources: Int,
-    val total_incompleted_video_conferences: Int,
-    val total_incompleted_metaverse_conferences: Int,
-    val total_incompleted_commons_resources: Int,
-    val total_incompleted_smart_attendances: Int,
-    val total_incompleted_movies: Int,
-    val total_unsubmitted_assignments: Int,
-)
-
-@Serializable
-data class TodoList(
-    val section_id: Int = -1,
-    val unit_id: Int = -1,
-    val component_id: Int = -1,
-    val generated_from_lecture_content: Boolean,
-    val component_type: String, // commons : 동영상 , assignment : 과제
-    val assignment_id: Int? = -1,
-    val title: String,
-    val due_date: String = "",
-)
-
-@Serializable
-data class Todos(
-    val to_dos: List<Todo>,
-    val total_count: Int,
-    val total_unread_messages: Int,
-)

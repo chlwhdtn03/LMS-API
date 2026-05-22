@@ -34,33 +34,7 @@ import kotlinx.serialization.Serializable
  */
 
 @Serializable
-data class LearnStatuses(
-    val learnstatuses: List<LearnStatus>,
-    val total_count: Int,
-)
-
-@Serializable
 data class LearnStatus(
     val course: Course,
     val sections: List<Section>,
-)
-@Serializable
-data class Section(
-    val section_id: Int,
-    val section_title: String? = "",
-    val position: Int,
-    val is_upcoming : Boolean,
-    val subsections: List<SubSection>,
-)
-@Serializable
-data class SubSection(
-    val subsection_id: Int,
-    val subsection_title: String? = "",
-    val position: Int,
-    val status: String,
-)
-@Serializable
-data class Course(
-    val id: Int,
-    val term_id: Int,
 )
