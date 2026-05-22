@@ -80,6 +80,7 @@ data class Submission(
     val preview_url: String? = "", // 제출한 파일 미리보기 주소
     val submitted_at: String? = "",
     val submission_type: String? = "",
+    val workflow_state: String? = "",
     val score: Double? = Double.NEGATIVE_INFINITY,
 ) {
     var name: String = "알 수 없음" // 과제 이름

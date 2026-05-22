@@ -12,4 +12,5 @@ data class TodoList(
     val assignment_id: Int? = -1,
     val title: String,
     val due_date: String = "",
+    val late_at: String? = "",
 )

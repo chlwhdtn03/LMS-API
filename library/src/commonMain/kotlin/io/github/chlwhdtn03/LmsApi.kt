@@ -78,7 +78,7 @@ object LmsApi {
     private suspend fun fetchTodos(term: Term): Todos {
         return client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/to_dos?term_ids[]=${term.id}") {
             headers { append("Authorization", "Bearer $apiBearerToken") }
-        }.apply { println(bodyAsText()) }.body<Todos>()
+        }.apply { println("fetchTodos : ${bodyAsText()}") }.body<Todos>()
     }
 
     private suspend fun fetchAssignmentGroups(courseId: Int): List<AssignmentGroup> {
@@ -99,7 +99,7 @@ object LmsApi {
             url {
                 parameters.append("per_page", "50")
             }
-        }.body<List<Submission>>()
+        }.apply { println("fetchSubmissions (courseId = $courseId) : ${bodyAsText()}") }.body<List<Submission>>()
     }
 
     private suspend fun fetchDiscussions(courseId: Int): List<Discussion> {
@@ -146,6 +146,29 @@ object LmsApi {
             submission.name = metadata.name
             submission.groupName = metadata.groupName
         }
+    }
+
+    private fun List<Todo>.filteredTodoListForCourse(
+        courseId: Int,
+        courseSubmissions: List<Submission>,
+    ): List<TodoList> {
+        val submittedAssignmentIds = courseSubmissions.asSequence()
+            .filter { submission -> submission.isCompletedForTodo() }
+            .mapNotNull { it.assignment_id?.takeIf { assignmentId -> assignmentId > 0 } }
+            .toSet()
+
+        return asSequence()
+            .filter { todo -> todo.course_id == courseId }
+            .flatMap { todo -> todo.todo_list.asSequence() }
+            .filterNot { todo ->
+                val assignmentId = todo.assignment_id ?: return@filterNot false
+                assignmentId in submittedAssignmentIds
+            }
+            .toList()
+    }
+
+    private fun Submission.isCompletedForTodo(): Boolean {
+        return !submitted_at.isNullOrBlank() || workflow_state == "submitted" || workflow_state == "graded"
     }
 
     private fun buildScoredAssignments(
@@ -283,10 +306,9 @@ object LmsApi {
         val learnStatuses = fetchLearnStatuses(term)
         loadingState(0.2f)
 
-        val todoList = fetchTodos(term)
+        val todos = fetchTodos(term)
         loadingState(0.3f)
 
-        val todoByCourseId = todoList.to_dos.associateFirstById { it.course_id }
         val learnStatusByCourseId = learnStatuses.learnstatuses.associateFirstById { it.course.id }
         val weight = 0.7f / lectures.size
         var nowProgress = 0.3f
@@ -305,7 +327,10 @@ object LmsApi {
                 name = lecture.name,
                 professor = lecture.professors,
                 totalStudents = lecture.total_students,
-                todoList = todoByCourseId[lecture.id]?.todo_list ?: emptyList(),
+                todoList = todos.to_dos.filteredTodoListForCourse(
+                    courseId = lecture.id,
+                    courseSubmissions = submissions,
+                ),
                 attendances = learnStatusByCourseId[lecture.id]?.sections?.map { section ->
                     section.subsections.map { sub ->
                         when (sub.status) {
@@ -335,10 +360,9 @@ object LmsApi {
         val lectures = fetchLectures(term)
         loadingState(0.1f)
 
-        val todoList = fetchTodos(term)
+        val todos = fetchTodos(term)
         loadingState(0.3f)
 
-        val todoByCourseId = todoList.to_dos.associateFirstById { it.course_id }
         val weight = 0.7f / lectures.size
         var nowProgress = 0.3f
         return lectures.map { lecture ->
@@ -356,7 +380,10 @@ object LmsApi {
                 name = lecture.name,
                 professor = lecture.professors,
                 totalStudents = lecture.total_students,
-                todoList = todoByCourseId[lecture.id]?.todo_list ?: emptyList(),
+                todoList = todos.to_dos.filteredTodoListForCourse(
+                    courseId = lecture.id,
+                    courseSubmissions = submissions,
+                ),
                 attendances = emptyList(),
                 discussions = emptyList(),
                 submissions = submissions,
