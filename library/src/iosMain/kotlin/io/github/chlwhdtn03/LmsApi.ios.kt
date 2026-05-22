@@ -7,7 +7,7 @@ import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
 @OptIn(ExperimentalForeignApi::class, ExperimentalEncodingApi::class)
-actual fun pemToString(rawPem: String, rawPw: String): String {
+internal actual fun pemToString(rawPem: String, rawPw: String): String {
     val pem = normalizePem(rawPem)
     val privateKey = createRsaPrivateKeyFromPkcs8(pemToDerBytes(pem))
     val encryptedData = Base64.decode(rawPw).toCfData()

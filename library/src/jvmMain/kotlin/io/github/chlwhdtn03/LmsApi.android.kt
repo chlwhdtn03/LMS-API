@@ -11,7 +11,7 @@ import javax.crypto.Cipher
 import kotlin.io.encoding.Base64
 import kotlin.use
 
-actual fun pemToString(rawPem: String, rawPw: String): String {
+internal actual fun pemToString(rawPem: String, rawPw: String): String {
     Security.addProvider(BouncyCastleProvider())
 
     val pem = normalizePem(rawPem)

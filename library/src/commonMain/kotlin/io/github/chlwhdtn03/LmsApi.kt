@@ -10,6 +10,10 @@ import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlin.time.ExperimentalTime
 
@@ -26,6 +30,8 @@ internal val client = HttpClient() {
     followRedirects = true
 }
 
+private val apiScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
 object LmsApi {
     private const val LMS_LOGIN_URL = "https://smartid.ssu.ac.kr/Symtra_sso/smln_pcs.asp"
     private const val LMS_CERT_URL = "https://lms.ssu.ac.kr/xn-sso/gw-cb.php"
@@ -40,6 +46,11 @@ object LmsApi {
         val name: String,
         val maxScore: Double,
     )
+
+    private enum class SubjectLoadMode {
+        Full,
+        TodoOnly,
+    }
 
     private fun checkLoggedIn() {
         if (!isLoggined || lmsId.isBlank()) {
@@ -171,6 +182,67 @@ object LmsApi {
         return !submitted_at.isNullOrBlank() || workflow_state == "submitted" || workflow_state == "graded"
     }
 
+    private fun Throwable.toResultMessage(): String {
+        return message ?: "알 수 없는 오류가 발생했습니다."
+    }
+
+    private fun launchLoginResult(
+        completion: (LmsLoginResult) -> Unit,
+        block: suspend () -> Boolean,
+    ) {
+        apiScope.launch {
+            val result = try {
+                LmsLoginResult(success = block())
+            } catch (throwable: Throwable) {
+                LmsLoginResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private fun launchTermsResult(
+        completion: (LmsTermsResult) -> Unit,
+        block: suspend () -> List<Term>,
+    ) {
+        apiScope.launch {
+            val result = try {
+                LmsTermsResult(success = true, terms = block())
+            } catch (throwable: Throwable) {
+                LmsTermsResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    private fun launchLoginInfoResult(
+        completion: (LmsLoginInfoResult) -> Unit,
+        block: suspend () -> Info,
+    ) {
+        apiScope.launch {
+            val result = try {
+                LmsLoginInfoResult(success = true, info = block())
+            } catch (throwable: Throwable) {
+                LmsLoginInfoResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    private fun launchSubjectsResult(
+        completion: (LmsSubjectsResult) -> Unit,
+        block: suspend () -> List<Subject>,
+    ) {
+        apiScope.launch {
+            val result = try {
+                LmsSubjectsResult(success = true, subjects = block())
+            } catch (throwable: Throwable) {
+                LmsSubjectsResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
     private fun buildScoredAssignments(
         submissions: List<Submission>,
         assignmentMetadataById: Map<Int, AssignmentMetadata>,
@@ -196,7 +268,7 @@ object LmsApi {
      * @param password LMS 비밀번호
      * @return LMS로그인에 성공하면 true, 실패하면 false를 반환합니다.
      */
-    suspend fun loginLMS(id: String, password: String): Boolean {
+    internal suspend fun loginLMS(id: String, password: String): Boolean {
         val loginResponse = client.submitForm(
             url = LMS_LOGIN_URL,
             formParameters = parameters {
@@ -281,88 +353,93 @@ object LmsApi {
     }
 
     @OptIn(ExperimentalTime::class)
-    suspend fun getTerms(): List<Term> {
+    internal suspend fun getTerms(): List<Term> {
         checkLoggedIn()
         return fetchTerms()
     }
 
-    suspend fun getLoginInfo(): Info {
+    internal suspend fun getLoginInfo(): Info {
         checkLoggedIn()
 
         return fetchLoginInfo()
     }
 
+    fun loginLMS(id: String, password: String, completion: (LmsLoginResult) -> Unit) {
+        launchLoginResult(completion) {
+            loginLMS(id, password)
+        }
+    }
+
+    @OptIn(ExperimentalTime::class)
+    fun getTerms(completion: (LmsTermsResult) -> Unit) {
+        launchTermsResult(completion) {
+            getTerms()
+        }
+    }
+
+    fun getLoginInfo(completion: (LmsLoginInfoResult) -> Unit) {
+        launchLoginInfoResult(completion) {
+            getLoginInfo()
+        }
+    }
+
+    @ExperimentalTime
+    fun getSubjects(
+        term: Term,
+        loadingState: (Float) -> Unit = {},
+        completion: (LmsSubjectsResult) -> Unit,
+    ) {
+        launchSubjectsResult(completion) {
+            loadSubjects(term, loadingState, SubjectLoadMode.Full)
+        }
+    }
+
+    @ExperimentalTime
+    fun getTodoList(
+        term: Term,
+        loadingState: (Float) -> Unit = {},
+        completion: (LmsSubjectsResult) -> Unit,
+    ) {
+        launchSubjectsResult(completion) {
+            loadSubjects(term, loadingState, SubjectLoadMode.TodoOnly)
+        }
+    }
+
     /**
      * @param loadingState Float 변수에는 진행률을 각 단계마다 전달합니다. (0.0f~1.0f)
-     * @throws IllegalStateException loginLMS()를 통해 로그인을 하지 않은 경우
      */
     @ExperimentalTime
-    suspend fun getSubjects(term: Term, loadingState: (Float) -> Unit = {}): List<Subject> {
-        checkLoggedIn()
-
-        val lectures = fetchLectures(term)
-        loadingState(0.1f)
-
-        val learnStatuses = fetchLearnStatuses(term)
-        loadingState(0.2f)
-
-        val todos = fetchTodos(term)
-        loadingState(0.3f)
-
-        val learnStatusByCourseId = learnStatuses.learnstatuses.associateFirstById { it.course.id }
-        val weight = 0.7f / lectures.size
-        var nowProgress = 0.3f
-        return lectures.map { lecture ->
-            nowProgress += weight
-            loadingState(nowProgress)
-
-            val assignmentMetadataById = fetchAssignmentGroups(lecture.id).toAssignmentMetadataById()
-            val submissions = fetchSubmissions(lecture.id)
-            applyAssignmentMetadata(submissions, assignmentMetadataById)
-
-            Subject(
-                id = lecture.id,
-                termId = lecture.term_id,
-                termName = term.name ?: "학기정보 없음",
-                name = lecture.name,
-                professor = lecture.professors,
-                totalStudents = lecture.total_students,
-                todoList = todos.to_dos.filteredTodoListForCourse(
-                    courseId = lecture.id,
-                    courseSubmissions = submissions,
-                ),
-                attendances = learnStatusByCourseId[lecture.id]?.sections?.map { section ->
-                    section.subsections.map { sub ->
-                        when (sub.status) {
-                            "attendance" -> AttendanceType.ATTENDANCE
-                            "absent" -> AttendanceType.ABSENT
-                            "late" -> AttendanceType.LATE // TODO 지각일때 뭐로 뜨는지 확인 필요
-                            else -> AttendanceType.NONE
-                        }
-                    }
-                } ?: emptyList(),
-                discussions = fetchDiscussions(lecture.id),
-                submissions = submissions,
-                scoredAssignments = buildScoredAssignments(submissions, assignmentMetadataById),
-            )
-        }
+    internal suspend fun getSubjects(term: Term, loadingState: (Float) -> Unit = {}): List<Subject> {
+        return loadSubjects(term, loadingState, SubjectLoadMode.Full)
     }
 
     /**
      * 제출해야 할 과제, 동영상 시청 정보만 빠르게 가져옵니다. (SSU-Time 전용)
      * @param loadingState Float 변수에는 진행률을 각 단계마다 전달합니다. (0.0f~1.0f)
-     * @throws IllegalStateException loginLMS()를 통해 로그인을 하지 않은 경우
      */
     @ExperimentalTime
-    suspend fun getTodoList(term: Term, loadingState: (Float) -> Unit = {}): List<Subject> {
+    internal suspend fun getTodoList(term: Term, loadingState: (Float) -> Unit = {}): List<Subject> {
+        return loadSubjects(term, loadingState, SubjectLoadMode.TodoOnly)
+    }
+
+    @ExperimentalTime
+    private suspend fun loadSubjects(
+        term: Term,
+        loadingState: (Float) -> Unit = {},
+        mode: SubjectLoadMode,
+    ): List<Subject> {
         checkLoggedIn()
 
         val lectures = fetchLectures(term)
         loadingState(0.1f)
 
+        val learnStatuses = if (mode == SubjectLoadMode.Full) fetchLearnStatuses(term) else null
+        loadingState(0.2f)
+
         val todos = fetchTodos(term)
         loadingState(0.3f)
 
+        val learnStatusByCourseId = learnStatuses?.learnstatuses?.associateFirstById { it.course.id }.orEmpty()
         val weight = 0.7f / lectures.size
         var nowProgress = 0.3f
         return lectures.map { lecture ->
@@ -384,10 +461,23 @@ object LmsApi {
                     courseId = lecture.id,
                     courseSubmissions = submissions,
                 ),
-                attendances = emptyList(),
-                discussions = emptyList(),
+                attendances = if (mode == SubjectLoadMode.Full) learnStatusByCourseId[lecture.id]?.sections?.map { section ->
+                    section.subsections.map { sub ->
+                        when (sub.status) {
+                            "attendance" -> AttendanceType.ATTENDANCE
+                            "absent" -> AttendanceType.ABSENT
+                            "late" -> AttendanceType.LATE
+                            else -> AttendanceType.NONE
+                        }
+                    }
+                } ?: emptyList() else emptyList(),
+                discussions = if (mode == SubjectLoadMode.Full) fetchDiscussions(lecture.id) else emptyList(),
                 submissions = submissions,
-                scoredAssignments = emptyList(),
+                scoredAssignments = if (mode == SubjectLoadMode.Full) {
+                    buildScoredAssignments(submissions, assignmentMetadataById)
+                } else {
+                    emptyList()
+                },
             )
         }
     }
@@ -402,4 +492,4 @@ fun normalizePem(raw: String): String {
         .trim()
 }
 
-expect fun pemToString(rawPem: String, rawPw: String): String
+internal expect fun pemToString(rawPem: String, rawPw: String): String

@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "io.github.chlwhdtn03"
-version = "1.2.4"
+version = "1.2.5"
 
 val ktor_version: String by project
 
@@ -60,6 +60,7 @@ kotlin {
         }
         commonMain.dependencies {
             implementation("com.aallam.openai:openai-client:4.1.0")
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
             implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.7.1")
             implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
             implementation("io.ktor:ktor-client-cio:${ktor_version}")
