@@ -120,6 +120,7 @@ SSU-Time에서는 전체 과목 상세 정보가 아니라 시간표와 할 일 
 loginLMS(id, password)
 getTerms()
 getTodoList(term)
+getCookies() // 외부 서비스에 현재 LMS 세션 쿠키를 전달해야 할 때만 사용
 ```
 
 중요한 점은 **SSU-Time에서는 `getSubjects()`가 아니라 `getTodoList()`를 사용한다는 것**입니다. `getSubjects()`는 출석, 공지, 점수까지 가져와서 더 무겁습니다.
@@ -171,6 +172,54 @@ LmsApi.shared.loginLMS(id: "학번", password: "비밀번호") { loginResult in
 
 completion과 `loadingState`는 메인 스레드 호출을 보장하지 않습니다. SwiftUI `@Published`나 UIKit UI를 갱신할 때는 `DispatchQueue.main.async`로 넘겨서 처리하세요.
 
+### Swift에서 LMS 세션 쿠키 가져오기
+
+로그인 이후 현재 `LmsApi` 클라이언트가 들고 있는 LMS 세션 쿠키가 필요하면 `getCookies`를 호출합니다. 응답은 `lmsSession.cookies` 구조입니다.
+
+```swift
+import LmsApi
+
+LmsApi.shared.loginLMS(id: "학번", password: "비밀번호") { loginResult in
+    guard loginResult.success else {
+        print(loginResult.errorMessage ?? "로그인 실패")
+        return
+    }
+
+    LmsApi.shared.getCookies { cookiesResult in
+        guard cookiesResult.success else {
+            print(cookiesResult.errorMessage ?? "쿠키 조회 실패")
+            return
+        }
+
+        let lmsSession = cookiesResult.lmsSession
+
+        for cookie in lmsSession.cookies {
+            print(cookie.name)
+            print(cookie.value)
+            print(cookie.domain)
+            print(cookie.path)
+        }
+    }
+}
+```
+
+외부 API가 아래 형태를 요구한다면 `cookiesResult.lmsSession.cookies`를 그대로 매핑하면 됩니다.
+
+```json
+{
+  "lmsSession": {
+    "cookies": [
+      {
+        "name": "string",
+        "value": "string",
+        "domain": "string",
+        "path": "string"
+      }
+    ]
+  }
+}
+```
+
 ### throws 없는 async/await 래퍼
 
 ```swift
@@ -202,6 +251,14 @@ enum SSUTimeLMSClient {
             LmsApi.shared.getTodoList(term: term, loadingState: { progress in
                 onProgress(progress.floatValue)
             }) { result in
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    static func getCookies() async -> LmsCookiesResult {
+        await withCheckedContinuation { continuation in
+            LmsApi.shared.getCookies { result in
                 continuation.resume(returning: result)
             }
         }
@@ -539,6 +596,16 @@ fun getLoginInfo(
 
 로그인한 사용자의 이름, 학과, 로그인 ID, 이메일 정보를 가져옵니다.
 
+### `LmsApi.getCookies`
+
+```kotlin
+fun getCookies(
+    completion: (LmsCookiesResult) -> Unit,
+)
+```
+
+현재 로그인 세션의 LMS 쿠키를 가져옵니다. 실제 쿠키 목록은 `result.lmsSession.cookies`입니다. 로그인 이후에 호출해야 하며, 외부 서비스에 현재 LMS 세션을 전달해야 할 때 사용합니다.
+
 ### Notice API
 
 ```kotlin
@@ -562,6 +629,7 @@ fun loadScholarships(
 - `LmsLoginResult`: `success`, `errorMessage`
 - `LmsTermsResult`: `success`, `terms`, `errorMessage`
 - `LmsLoginInfoResult`: `success`, `info`, `errorMessage`
+- `LmsCookiesResult`: `success`, `lmsSession`, `errorMessage`
 - `LmsSubjectsResult`: `success`, `subjects`, `errorMessage`
 - `StartUpNoticesResult`: `success`, `notices`, `errorMessage`
 - `ScholarshipNoticesResult`: `success`, `notices`, `errorMessage`
@@ -598,6 +666,17 @@ fun loadScholarships(
 - `title`: 제목
 - `due_date`: 마감 시각
 
+### `LmsSession`
+
+- `cookies`: 현재 로그인 세션에서 사용하는 쿠키 목록
+
+### `LmsSessionCookie`
+
+- `name`: 쿠키 이름
+- `value`: 쿠키 값
+- `domain`: 쿠키 도메인
+- `path`: 쿠키 경로
+
 ### `Submission`
 
 - `assignment_id`: 과제 ID
@@ -613,7 +692,7 @@ fun loadScholarships(
 
 ## 주의사항
 
-- `getTerms`, `getTodoList`, `getSubjects`, `getLoginInfo`는 반드시 `loginLMS` 이후에 호출해야 합니다.
+- `getTerms`, `getTodoList`, `getSubjects`, `getLoginInfo`, `getCookies`는 반드시 `loginLMS` 이후에 호출해야 합니다.
 - iOS에서는 Kotlin `object LmsApi`가 Swift의 `LmsApi.shared`로 보입니다.
 - iOS/Android public API는 callback result 방식입니다. Swift에 `throws` 기반 API를 노출하지 않기 위해 내부 suspend 함수는 public으로 노출하지 않습니다.
 - completion과 `loadingState`는 메인 스레드 호출을 보장하지 않습니다.

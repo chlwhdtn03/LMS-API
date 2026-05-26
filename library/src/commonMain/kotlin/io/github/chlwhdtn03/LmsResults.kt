@@ -1,6 +1,7 @@
 package io.github.chlwhdtn03
 
 import io.github.chlwhdtn03.data.Lms.Info
+import io.github.chlwhdtn03.data.Lms.LmsSession
 import io.github.chlwhdtn03.data.Lms.Subject
 import io.github.chlwhdtn03.data.Lms.Term
 import io.github.chlwhdtn03.data.notice.ScholarshipNotice
@@ -22,6 +23,12 @@ data class LmsTermsResult(
 data class LmsLoginInfoResult(
     val success: Boolean,
     val info: Info? = null,
+    val errorMessage: String? = null,
+)
+
+data class LmsCookiesResult(
+    val success: Boolean,
+    val lmsSession: LmsSession = LmsSession(),
     val errorMessage: String? = null,
 )
 

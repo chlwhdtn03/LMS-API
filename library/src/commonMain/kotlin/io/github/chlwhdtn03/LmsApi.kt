@@ -36,6 +36,11 @@ internal val client = HttpClient() {
 
 private val apiScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 private const val XSSI_PREFIX = "while(1);"
+private val LMS_COOKIE_URLS = listOf(
+    "https://canvas.ssu.ac.kr",
+    "https://lms.ssu.ac.kr",
+    "https://smartid.ssu.ac.kr",
+)
 
 private fun String.withoutXssiPrefix(): String {
     val body = dropWhile { it == '\uFEFF' || it.isWhitespace() }
@@ -97,6 +102,28 @@ object LmsApi {
         return client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/learnstatus?term_ids=${term.id}&type=subsection") {
             headers { append("Authorization", "Bearer $apiBearerToken") }
         }.body<LearnStatuses>()
+    }
+
+    private suspend fun fetchLmsSession(): LmsSessionResponse {
+        val cookiesByKey = linkedMapOf<String, LmsSessionCookie>()
+
+        for (urlString in LMS_COOKIE_URLS) {
+            val url = Url(urlString)
+            for (cookie in client.cookies(url)) {
+                val sessionCookie = LmsSessionCookie(
+                    name = cookie.name,
+                    value = cookie.value,
+                    domain = cookie.domain ?: url.host,
+                    path = cookie.path ?: "/",
+                )
+                val key = "${sessionCookie.domain}|${sessionCookie.path}|${sessionCookie.name}"
+                cookiesByKey[key] = sessionCookie
+            }
+        }
+
+        return LmsSessionResponse(
+            lmsSession = LmsSession(cookies = cookiesByKey.values.toList()),
+        )
     }
 
     private suspend fun fetchAssignmentGroups(courseId: Int): List<AssignmentGroup> {
@@ -314,6 +341,20 @@ object LmsApi {
         }
     }
 
+    private fun launchCookiesResult(
+        completion: (LmsCookiesResult) -> Unit,
+        block: suspend () -> LmsSessionResponse,
+    ) {
+        apiScope.launch {
+            val result = try {
+                LmsCookiesResult(success = true, lmsSession = block().lmsSession)
+            } catch (throwable: Throwable) {
+                LmsCookiesResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
     private fun launchSubjectsResult(
         completion: (LmsSubjectsResult) -> Unit,
         block: suspend () -> List<Subject>,
@@ -449,6 +490,12 @@ object LmsApi {
         return fetchLoginInfo()
     }
 
+    internal suspend fun getCookies(): LmsSessionResponse {
+        checkLoggedIn()
+
+        return fetchLmsSession()
+    }
+
     fun loginLMS(id: String, password: String, completion: (LmsLoginResult) -> Unit) {
         launchLoginResult(completion) {
             loginLMS(id, password)
@@ -465,6 +512,12 @@ object LmsApi {
     fun getLoginInfo(completion: (LmsLoginInfoResult) -> Unit) {
         launchLoginInfoResult(completion) {
             getLoginInfo()
+        }
+    }
+
+    fun getCookies(completion: (LmsCookiesResult) -> Unit) {
+        launchCookiesResult(completion) {
+            getCookies()
         }
     }
 
