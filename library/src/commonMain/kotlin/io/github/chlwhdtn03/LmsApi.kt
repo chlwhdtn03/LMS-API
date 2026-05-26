@@ -113,7 +113,7 @@ object LmsApi {
                 val sessionCookie = LmsSessionCookie(
                     name = cookie.name,
                     value = cookie.value,
-                    domain = cookie.domain ?: url.host,
+                    domain = ".ssu.ac.kr",
                     path = cookie.path ?: "/",
                 )
                 val key = "${sessionCookie.domain}|${sessionCookie.path}|${sessionCookie.name}"
