@@ -15,7 +15,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 
 private val lmsJson = Json {
     ignoreUnknownKeys = true
@@ -97,13 +99,6 @@ object LmsApi {
         }.body<LearnStatuses>()
     }
 
-    @OptIn(ExperimentalTime::class)
-    private suspend fun fetchTodos(term: Term): Todos {
-        return client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/to_dos?term_ids[]=${term.id}") {
-            headers { append("Authorization", "Bearer $apiBearerToken") }
-        }.apply { println("fetchTodos : ${bodyAsText()}") }.body<Todos>()
-    }
-
     private suspend fun fetchAssignmentGroups(courseId: Int): List<AssignmentGroup> {
         return client.get("https://canvas.ssu.ac.kr/api/v1/courses/${courseId}/assignment_groups") {
             url {
@@ -179,27 +174,53 @@ object LmsApi {
         }
     }
 
-    private fun List<Todo>.filteredTodoListForCourse(
-        courseId: Int,
-        courseSubmissions: List<Submission>,
-    ): List<TodoList> {
-        val submittedAssignmentIds = courseSubmissions.asSequence()
-            .filter { submission -> submission.isCompletedForTodo() }
-            .mapNotNull { it.assignment_id?.takeIf { assignmentId -> assignmentId > 0 } }
-            .toSet()
-
-        return asSequence()
-            .filter { todo -> todo.course_id == courseId }
-            .flatMap { todo -> todo.todo_list.asSequence() }
-            .filterNot { todo ->
-                val assignmentId = todo.assignment_id ?: return@filterNot false
-                assignmentId in submittedAssignmentIds
-            }
-            .toList()
-    }
-
     private fun Submission.isCompletedForTodo(): Boolean {
         return !submitted_at.isNullOrBlank() || workflow_state == "submitted" || workflow_state == "graded"
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private fun String?.isFutureInstant(now: Instant): Boolean {
+        val value = takeUnless { it.isNullOrBlank() } ?: return false
+        val dueDate = runCatching { Instant.parse(value) }.getOrNull() ?: return false
+        return dueDate > now
+    }
+
+    private fun String?.orFallback(fallback: String): String {
+        return takeUnless { it.isNullOrBlank() } ?: fallback
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private suspend fun buildTodoListFromSubmissions(
+        courseId: Int,
+        submissions: List<Submission>,
+    ): List<TodoList> {
+        val now = Clock.System.now()
+        val seenAssignmentIds = mutableSetOf<Int>()
+        val todoList = mutableListOf<TodoList>()
+
+        for (submission in submissions) {
+            val assignmentId = submission.assignment_id?.takeIf { it > 0 } ?: continue
+            if (!seenAssignmentIds.add(assignmentId)) continue
+            if (submission.isCompletedForTodo()) continue
+            if (!submission.cached_due_date.isFutureInstant(now)) continue
+
+            val assignmentDetail = fetchAssignmentDetails(courseId, assignmentId)
+            val dueDate = submission.cached_due_date.orFallback(assignmentDetail.due_at.orEmpty())
+
+            todoList += TodoList(
+                section_id = 0,
+                unit_id = 0,
+                component_id = 0,
+                generated_from_lecture_content = false,
+                component_type = "assignment",
+                assignment_id = assignmentId,
+                title = assignmentDetail.name.orFallback(submission.name),
+                due_date = dueDate,
+                late_at = assignmentDetail.late_at.orFallback(assignmentDetail.lock_at.orEmpty()),
+            )
+        }
+
+        return todoList.sortedBy { it.due_date }
     }
 
     private fun Throwable.toResultMessage(): String {
@@ -456,7 +477,6 @@ object LmsApi {
         val learnStatuses = if (mode == SubjectLoadMode.Full) fetchLearnStatuses(term) else null
         loadingState(0.2f)
 
-        val todos = fetchTodos(term)
         loadingState(0.3f)
 
         val learnStatusByCourseId = learnStatuses?.learnstatuses?.associateFirstById { it.course.id }.orEmpty()
@@ -477,9 +497,9 @@ object LmsApi {
                 name = lecture.name,
                 professor = lecture.professors,
                 totalStudents = lecture.total_students,
-                todoList = todos.to_dos.filteredTodoListForCourse(
+                todoList = buildTodoListFromSubmissions(
                     courseId = lecture.id,
-                    courseSubmissions = submissions,
+                    submissions = submissions,
                 ),
                 attendances = if (mode == SubjectLoadMode.Full) learnStatusByCourseId[lecture.id]?.sections?.map { section ->
                     section.subsections.map { sub ->
