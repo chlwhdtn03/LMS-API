@@ -120,6 +120,17 @@ object LmsApi {
         return lmsJson.decodeFromString(responseBody.withoutXssiPrefix())
     }
 
+    private suspend fun fetchTodoDetail(courseId: Int): List<TodoDetail> {
+        val responseBody = client
+            .get("https://canvas.ssu.ac.kr/learningx/api/v1/courses/${courseId}/modules?include_detail=true") {
+                headers { append("Authorization", "Bearer $apiBearerToken") }
+            }
+            .bodyAsText()
+
+        return lmsJson.decodeFromString(responseBody.withoutXssiPrefix())
+    }
+
+
     private suspend fun fetchSubmissions(courseId: Int): List<Submission> {
         return client.get("https://canvas.ssu.ac.kr/api/v1/courses/${courseId}/students/submissions") {
             url {
@@ -190,6 +201,35 @@ object LmsApi {
     }
 
     @OptIn(ExperimentalTime::class)
+    private fun List<TodoDetail>.toCommonsTodoList(now: Instant): List<TodoList> {
+        val todoList = mutableListOf<TodoList>()
+
+        for (module in this) {
+            for (item in module.module_items.orEmpty()) {
+                val contentData = item.content_data ?: continue
+                val itemContentType = contentData.item_content_type ?: continue
+                if (itemContentType != "commons") continue
+                if (item.completed == true) continue
+                if (!contentData.due_at.isFutureInstant(now)) continue
+
+                todoList += TodoList(
+                    section_id = 0,
+                    unit_id = 0,
+                    component_id = contentData.item_id ?: item.content_id ?: 0,
+                    generated_from_lecture_content = false,
+                    component_type = itemContentType,
+                    assignment_id = -1,
+                    title = contentData.title.orFallback(item.title.orEmpty()),
+                    due_date = contentData.due_at.orEmpty(),
+                    late_at = contentData.late_at.orEmpty(),
+                )
+            }
+        }
+
+        return todoList
+    }
+
+    @OptIn(ExperimentalTime::class)
     private suspend fun buildTodoListFromSubmissions(
         courseId: Int,
         submissions: List<Submission>,
@@ -219,6 +259,8 @@ object LmsApi {
                 late_at = assignmentDetail.late_at.orFallback(assignmentDetail.lock_at.orEmpty()),
             )
         }
+
+        todoList += fetchTodoDetail(courseId).toCommonsTodoList(now)
 
         return todoList.sortedBy { it.due_date }
     }
