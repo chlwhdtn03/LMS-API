@@ -17,20 +17,32 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlin.time.ExperimentalTime
 
+private val lmsJson = Json {
+    ignoreUnknownKeys = true
+    prettyPrint = true
+    isLenient = true
+    coerceInputValues = true
+}
+
 internal val client = HttpClient() {
     install(HttpCookies)
     install(ContentNegotiation) {
-        json(Json {
-            ignoreUnknownKeys = true
-            prettyPrint = true
-            isLenient = true
-            coerceInputValues = true
-        })
+        json(lmsJson)
     }
     followRedirects = true
 }
 
 private val apiScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+private const val XSSI_PREFIX = "while(1);"
+
+private fun String.withoutXssiPrefix(): String {
+    val body = dropWhile { it == '\uFEFF' || it.isWhitespace() }
+    return if (body.startsWith(XSSI_PREFIX)) {
+        body.drop(XSSI_PREFIX.length).dropWhile { it.isWhitespace() }
+    } else {
+        body
+    }
+}
 
 object LmsApi {
     private const val LMS_LOGIN_URL = "https://smartid.ssu.ac.kr/Symtra_sso/smln_pcs.asp"
@@ -105,6 +117,14 @@ object LmsApi {
         }.body<List<AssignmentGroup>>()
     }
 
+    private suspend fun fetchAssignmentDetails(courseId: Int, assignmentId: Int): AssignmentDetail {
+        val responseBody = client
+            .get("https://canvas.ssu.ac.kr/api/v1/courses/$courseId/assignments/$assignmentId")
+            .bodyAsText()
+
+        return lmsJson.decodeFromString(responseBody.withoutXssiPrefix())
+    }
+
     private suspend fun fetchSubmissions(courseId: Int): List<Submission> {
         return client.get("https://canvas.ssu.ac.kr/api/v1/courses/${courseId}/students/submissions") {
             url {
@@ -140,7 +160,7 @@ object LmsApi {
                     result[assignment.id] = AssignmentMetadata(
                         groupName = group.name,
                         name = assignment.name,
-                        maxScore = assignment.points_possible,
+                        maxScore = assignment.points_possible ?: 0.0,
                     )
                 }
             }

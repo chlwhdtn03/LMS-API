@@ -68,7 +68,7 @@ import kotlinx.serialization.Serializable
  *       "preview_url": null
  *     }
  *   ]
- * }
+ * }서
  */
 @Serializable
 data class Submission(
