@@ -26,6 +26,7 @@ data class TodoDetailContentData(
     val item_id: Int? = 0,
     val item_content_type: String? = "",
     val title: String? = "",
+    val description: String? = "",
     val due_at: String? = "",
     val late_at: String? = "",
 )

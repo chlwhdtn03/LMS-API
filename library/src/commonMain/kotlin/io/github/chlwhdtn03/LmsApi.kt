@@ -222,6 +222,7 @@ object LmsApi {
                     title = contentData.title.orFallback(item.title.orEmpty()),
                     due_date = contentData.due_at.orEmpty(),
                     late_at = contentData.late_at.orEmpty(),
+                    description = contentData.description,
                 )
             }
         }
@@ -257,6 +258,7 @@ object LmsApi {
                 title = assignmentDetail.name.orFallback(submission.name),
                 due_date = dueDate,
                 late_at = assignmentDetail.late_at.orFallback(assignmentDetail.lock_at.orEmpty()),
+                description = assignmentDetail.description,
             )
         }
 
