@@ -14,7 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.*
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -227,6 +227,20 @@ object LmsApi {
         return takeUnless { it.isNullOrBlank() } ?: fallback
     }
 
+    private fun JsonElement?.hasJsonDoubleProperty(name: String): Boolean {
+        val jsonObject = when (this) {
+            is JsonObject -> this
+            is JsonPrimitive -> {
+                val value = contentOrNull ?: return false
+                runCatching { lmsJson.parseToJsonElement(value) }
+                    .getOrNull() as? JsonObject ?: return false
+            }
+            else -> return false
+        }
+        val primitive = jsonObject[name] as? JsonPrimitive ?: return false
+        return !primitive.isString && primitive.doubleOrNull != null
+    }
+
     @OptIn(ExperimentalTime::class)
     private fun List<TodoDetail>.toCommonsTodoList(now: Instant): List<TodoList> {
         val todoList = mutableListOf<TodoList>()
@@ -236,6 +250,7 @@ object LmsApi {
                 val contentData = item.content_data ?: continue
                 val itemContentType = contentData.item_content_type ?: continue
                 if (itemContentType != "commons") continue
+                if (!contentData.item_content_data.hasJsonDoubleProperty("duration")) continue
                 if (item.completed == true) continue
                 if (!contentData.due_at.isFutureInstant(now)) continue
 
@@ -462,7 +477,6 @@ object LmsApi {
                     HttpHeaders.Accept,
                     "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
                 )
-
             }
         }
 
