@@ -1,7 +1,6 @@
 package io.github.chlwhdtn03.data.Lms
 
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonElement
 
 @Serializable
 data class TodoDetail(
@@ -26,9 +25,14 @@ data class TodoDetailModuleItem(
 data class TodoDetailContentData(
     val item_id: Int? = 0,
     val item_content_type: String? = "",
-    val item_content_data: JsonElement? = null,
+    val item_content_data: TodoDetailItemContentData? = null,
     val title: String? = "",
     val description: String? = "",
     val due_at: String? = "",
     val late_at: String? = "",
+)
+
+@Serializable
+data class TodoDetailItemContentData(
+    val duration: Double? = null,
 )

@@ -14,14 +14,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.*
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 
 private val lmsJson = Json {
     ignoreUnknownKeys = true
-    prettyPrint = true
     isLenient = true
     coerceInputValues = true
 }
@@ -64,6 +64,24 @@ object LmsApi {
         val groupName: String,
         val name: String,
         val maxScore: Double,
+    )
+
+    @Serializable
+    private data class TodoSubmission(
+        val assignment_id: Int? = 0,
+        val cached_due_date: String? = "",
+        val submitted_at: String? = "",
+        val workflow_state: String? = "",
+        val name: String = "알 수 없음",
+    )
+
+    @Serializable
+    private data class TodoAssignmentDetail(
+        val name: String? = "",
+        val description: String? = "",
+        val due_at: String? = "",
+        val lock_at: String? = "",
+        val late_at: String? = "",
     )
 
     private enum class SubjectLoadMode {
@@ -139,7 +157,7 @@ object LmsApi {
         }.body<List<AssignmentGroup>>()
     }
 
-    private suspend fun fetchAssignmentDetails(courseId: Int, assignmentId: Int): AssignmentDetail {
+    private suspend fun fetchAssignmentDetails(courseId: Int, assignmentId: Int): TodoAssignmentDetail {
         val responseBody = client
             .get("https://canvas.ssu.ac.kr/api/v1/courses/$courseId/assignments/$assignmentId")
             .bodyAsText()
@@ -163,7 +181,15 @@ object LmsApi {
             url {
                 parameters.append("per_page", "50")
             }
-        }.apply { println("fetchSubmissions (courseId = $courseId) : ${bodyAsText()}") }.body<List<Submission>>()
+        }.body<List<Submission>>()
+    }
+
+    private suspend fun fetchTodoSubmissions(courseId: Int): List<TodoSubmission> {
+        return client.get("https://canvas.ssu.ac.kr/api/v1/courses/${courseId}/students/submissions") {
+            url {
+                parameters.append("per_page", "50")
+            }
+        }.body<List<TodoSubmission>>()
     }
 
     private suspend fun fetchDiscussions(courseId: Int): List<Discussion> {
@@ -212,7 +238,7 @@ object LmsApi {
         }
     }
 
-    private fun Submission.isCompletedForTodo(): Boolean {
+    private fun TodoSubmission.isCompletedForTodo(): Boolean {
         return !submitted_at.isNullOrBlank() || workflow_state == "submitted" || workflow_state == "graded"
     }
 
@@ -227,18 +253,14 @@ object LmsApi {
         return takeUnless { it.isNullOrBlank() } ?: fallback
     }
 
-    private fun JsonElement?.hasJsonDoubleProperty(name: String): Boolean {
-        val jsonObject = when (this) {
-            is JsonObject -> this
-            is JsonPrimitive -> {
-                val value = contentOrNull ?: return false
-                runCatching { lmsJson.parseToJsonElement(value) }
-                    .getOrNull() as? JsonObject ?: return false
-            }
-            else -> return false
-        }
-        val primitive = jsonObject[name] as? JsonPrimitive ?: return false
-        return !primitive.isString && primitive.doubleOrNull != null
+    private fun Submission.toTodoSubmission(): TodoSubmission {
+        return TodoSubmission(
+            assignment_id = assignment_id,
+            cached_due_date = cached_due_date,
+            submitted_at = submitted_at,
+            workflow_state = workflow_state,
+            name = name,
+        )
     }
 
     @OptIn(ExperimentalTime::class)
@@ -250,7 +272,7 @@ object LmsApi {
                 val contentData = item.content_data ?: continue
                 val itemContentType = contentData.item_content_type ?: continue
                 if (itemContentType != "commons") continue
-                if (!contentData.item_content_data.hasJsonDoubleProperty("duration")) continue
+                if (contentData.item_content_data?.duration == null) continue
                 if (item.completed == true) continue
                 if (!contentData.due_at.isFutureInstant(now)) continue
 
@@ -275,7 +297,7 @@ object LmsApi {
     @OptIn(ExperimentalTime::class)
     private suspend fun buildTodoListFromSubmissions(
         courseId: Int,
-        submissions: List<Submission>,
+        submissions: List<TodoSubmission>,
     ): List<TodoList> {
         val now = Clock.System.now()
         val seenAssignmentIds = mutableSetOf<Int>()
@@ -591,15 +613,26 @@ object LmsApi {
         loadingState(0.3f)
 
         val learnStatusByCourseId = learnStatuses?.learnstatuses?.associateFirstById { it.course.id }.orEmpty()
-        val weight = 0.7f / lectures.size
+        val weight = if (lectures.isEmpty()) 0f else 0.7f / lectures.size
         var nowProgress = 0.3f
         return lectures.map { lecture ->
             nowProgress += weight
             loadingState(nowProgress)
 
-            val assignmentMetadataById = fetchAssignmentGroups(lecture.id).toAssignmentMetadataById()
-            val submissions = fetchSubmissions(lecture.id)
-            applyAssignmentMetadata(submissions, assignmentMetadataById)
+            val assignmentMetadataById: Map<Int, AssignmentMetadata>
+            val submissions: List<Submission>
+            val todoSubmissions: List<TodoSubmission>
+
+            if (mode == SubjectLoadMode.Full) {
+                assignmentMetadataById = fetchAssignmentGroups(lecture.id).toAssignmentMetadataById()
+                submissions = fetchSubmissions(lecture.id)
+                applyAssignmentMetadata(submissions, assignmentMetadataById)
+                todoSubmissions = submissions.map { it.toTodoSubmission() }
+            } else {
+                assignmentMetadataById = emptyMap()
+                submissions = emptyList()
+                todoSubmissions = fetchTodoSubmissions(lecture.id)
+            }
 
             Subject(
                 id = lecture.id,
@@ -610,7 +643,7 @@ object LmsApi {
                 totalStudents = lecture.total_students,
                 todoList = buildTodoListFromSubmissions(
                     courseId = lecture.id,
-                    submissions = submissions,
+                    submissions = todoSubmissions,
                 ),
                 attendances = if (mode == SubjectLoadMode.Full) learnStatusByCourseId[lecture.id]?.sections?.map { section ->
                     section.subsections.map { sub ->
