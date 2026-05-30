@@ -158,21 +158,17 @@ object LmsApi {
     }
 
     private suspend fun fetchAssignmentDetails(courseId: Int, assignmentId: Int): TodoAssignmentDetail {
-        val responseBody = client
+        return client
             .get("https://canvas.ssu.ac.kr/api/v1/courses/$courseId/assignments/$assignmentId")
-            .bodyAsText()
-
-        return lmsJson.decodeFromString(responseBody.withoutXssiPrefix())
+            .body<TodoAssignmentDetail>()
     }
 
     private suspend fun fetchTodoDetail(courseId: Int): List<TodoDetail> {
-        val responseBody = client
+        return client
             .get("https://canvas.ssu.ac.kr/learningx/api/v1/courses/${courseId}/modules?include_detail=true") {
                 headers { append("Authorization", "Bearer $apiBearerToken") }
             }
-            .bodyAsText()
-
-        return lmsJson.decodeFromString(responseBody.withoutXssiPrefix())
+            .body<List<TodoDetail>>()
     }
 
 
@@ -188,6 +184,12 @@ object LmsApi {
         return client.get("https://canvas.ssu.ac.kr/api/v1/courses/${courseId}/students/submissions") {
             url {
                 parameters.append("per_page", "50")
+                parameters.append("exclude_response_fields[]", "body")
+                parameters.append("exclude_response_fields[]", "preview_url")
+                parameters.append("exclude_response_fields[]", "attachments")
+                parameters.append("exclude_response_fields[]", "turnitin_data")
+                parameters.append("exclude_response_fields[]", "submission_comments")
+                parameters.append("exclude_response_fields[]", "rubric_assessment")
             }
         }.body<List<TodoSubmission>>()
     }
@@ -240,6 +242,18 @@ object LmsApi {
 
     private fun TodoSubmission.isCompletedForTodo(): Boolean {
         return !submitted_at.isNullOrBlank() || workflow_state == "submitted" || workflow_state == "graded"
+    }
+
+    private fun Activity?.mayHaveTodoAssignments(): Boolean {
+        return this == null || total_unsubmitted_assignments > 0
+    }
+
+    private fun Activity?.mayHaveCommonsTodos(): Boolean {
+        return this == null ||
+            total_incompleted_commons_resources > 0 ||
+            total_incompleted_movies > 0 ||
+            total_incompleted_video_conferences > 0 ||
+            total_incompleted_metaverse_conferences > 0
     }
 
     @OptIn(ExperimentalTime::class)
@@ -298,6 +312,7 @@ object LmsApi {
     private suspend fun buildTodoListFromSubmissions(
         courseId: Int,
         submissions: List<TodoSubmission>,
+        includeCommons: Boolean,
     ): List<TodoList> {
         val now = Clock.System.now()
         val seenAssignmentIds = mutableSetOf<Int>()
@@ -326,7 +341,9 @@ object LmsApi {
             )
         }
 
-        todoList += fetchTodoDetail(courseId).toCommonsTodoList(now)
+        if (includeCommons) {
+            todoList += fetchTodoDetail(courseId).toCommonsTodoList(now)
+        }
 
         return todoList.sortedBy { it.due_date }
     }
@@ -615,36 +632,52 @@ object LmsApi {
         val learnStatusByCourseId = learnStatuses?.learnstatuses?.associateFirstById { it.course.id }.orEmpty()
         val weight = if (lectures.isEmpty()) 0f else 0.7f / lectures.size
         var nowProgress = 0.3f
-        return lectures.map { lecture ->
+        val subjects = mutableListOf<Subject>()
+
+        for (lecture in lectures) {
             nowProgress += weight
             loadingState(nowProgress)
 
             val assignmentMetadataById: Map<Int, AssignmentMetadata>
             val submissions: List<Submission>
             val todoSubmissions: List<TodoSubmission>
+            val includeCommons: Boolean
 
             if (mode == SubjectLoadMode.Full) {
                 assignmentMetadataById = fetchAssignmentGroups(lecture.id).toAssignmentMetadataById()
                 submissions = fetchSubmissions(lecture.id)
                 applyAssignmentMetadata(submissions, assignmentMetadataById)
                 todoSubmissions = submissions.map { it.toTodoSubmission() }
+                includeCommons = true
             } else {
+                val mayHaveAssignments = lecture.activities.mayHaveTodoAssignments()
+                includeCommons = lecture.activities.mayHaveCommonsTodos()
+                if (!mayHaveAssignments && !includeCommons) continue
+
                 assignmentMetadataById = emptyMap()
                 submissions = emptyList()
-                todoSubmissions = fetchTodoSubmissions(lecture.id)
+                todoSubmissions = if (mayHaveAssignments) {
+                    fetchTodoSubmissions(lecture.id)
+                } else {
+                    emptyList()
+                }
             }
 
-            Subject(
+            val todoList = buildTodoListFromSubmissions(
+                courseId = lecture.id,
+                submissions = todoSubmissions,
+                includeCommons = includeCommons,
+            )
+            if (mode == SubjectLoadMode.TodoOnly && todoList.isEmpty()) continue
+
+            subjects += Subject(
                 id = lecture.id,
                 termId = lecture.term_id,
                 termName = term.name ?: "학기정보 없음",
                 name = lecture.name,
                 professor = lecture.professors,
                 totalStudents = lecture.total_students,
-                todoList = buildTodoListFromSubmissions(
-                    courseId = lecture.id,
-                    submissions = todoSubmissions,
-                ),
+                todoList = todoList,
                 attendances = if (mode == SubjectLoadMode.Full) learnStatusByCourseId[lecture.id]?.sections?.map { section ->
                     section.subsections.map { sub ->
                         when (sub.status) {
@@ -664,6 +697,8 @@ object LmsApi {
                 },
             )
         }
+
+        return subjects
     }
 }
 

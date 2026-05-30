@@ -32,4 +32,5 @@ data class Lecture(
     val ended: Boolean,
     val course_format_custom_name: String,
     val course_format: String,
+    val activities: Activity? = null,
 )
