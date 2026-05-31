@@ -16,10 +16,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
+import kotlinx.serialization.json.*
 import kotlin.random.Random
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -49,8 +46,7 @@ private val LMS_COOKIE_URLS = listOf(
 private const val POSTHOG_PROJECT_API_KEY = "phc_sinEnUbdB53pan2msu4u6WFb3V49EYm8fbRxrX8FP7tn"
 private const val POSTHOG_BATCH_URL = "https://us.i.posthog.com/batch/"
 private const val POSTHOG_IDENTIFY_EVENT = "\$identify"
-private const val POSTHOG_TODO_SYNC_EVENT = "todo_sync"
-private const val POSTHOG_TODO_ITEM_SEEN_EVENT = "todo_item_seen"
+private const val POSTHOG_TODO_SNAPSHOT_EVENT = "todo_snapshot"
 
 private fun String.withoutXssiPrefix(): String {
     val body = dropWhile { it == '\uFEFF' || it.isWhitespace() }
@@ -121,9 +117,6 @@ object LmsApi {
         val itemKey: String,
         val itemType: String,
         val courseId: Int,
-        val courseName: String,
-        val itemId: Int,
-        val title: String,
         val dueAt: String,
         val isCompleted: Boolean,
         val isOverdueUnsubmitted: Boolean,
@@ -141,6 +134,8 @@ object LmsApi {
         val commonsStats: UnsubmittedStats = UnsubmittedStats(),
         val commonsTrackingItems: List<TodoTrackingItem> = emptyList(),
     )
+
+    private val trackedTodoSnapshotDatesByDistinctId = mutableMapOf<String, String>()
 
     private fun checkLoggedIn() {
         if (!isLoggined || lmsId.isBlank()) {
@@ -328,7 +323,6 @@ object LmsApi {
 
     private fun List<TodoSubmission>.toSubmissionTrackingItems(
         courseId: Int,
-        courseName: String,
         now: Instant,
     ): List<TodoTrackingItem> {
         val seenAssignmentIds = mutableSetOf<Int>()
@@ -342,9 +336,6 @@ object LmsApi {
                 itemKey = "submission:$courseId:$assignmentId",
                 itemType = "submission",
                 courseId = courseId,
-                courseName = courseName,
-                itemId = assignmentId,
-                title = submission.name,
                 dueAt = submission.cached_due_date.orEmpty(),
                 isCompleted = submission.isCompletedForTodo(),
                 isOverdueUnsubmitted = submission.isOverdueUnsubmitted(now),
@@ -370,8 +361,12 @@ object LmsApi {
     ) {
         val distinctId = postHogDistinctId?.trim()?.takeIf { it.isNotBlank() } ?: return
         val now = Clock.System.now().toString()
+        val today = now.substringBefore('T')
+        if (trackedTodoSnapshotDatesByDistinctId[distinctId] == today) return
+        trackedTodoSnapshotDatesByDistinctId[distinctId] = today
+
         val syncId = "todo_sync:${Random.nextLong()}:$now"
-        val events = buildList {
+        val events = buildList<PostHogBatchEvent> {
             add(
                 PostHogBatchEvent(
                     event = POSTHOG_IDENTIFY_EVENT,
@@ -393,7 +388,7 @@ object LmsApi {
             )
             add(
                 PostHogBatchEvent(
-                    event = POSTHOG_TODO_SYNC_EVENT,
+                    event = POSTHOG_TODO_SNAPSHOT_EVENT,
                     properties = buildJsonObject {
                         put("distinct_id", distinctId)
                         put("sync_id", syncId)
@@ -401,35 +396,38 @@ object LmsApi {
                         put("snapshot_total_count", stats.totalCount)
                         put("snapshot_unsubmitted_count", stats.unsubmittedCount)
                         put("snapshot_unsubmitted_ratio", stats.ratio)
+                        put("item_keys", buildJsonArray {
+                            for (item in items) {
+                                add(JsonPrimitive(item.itemKey))
+                            }
+                        })
+                        put("overdue_unsubmitted_item_keys", buildJsonArray {
+                            for (item in items) {
+                                if (item.isOverdueUnsubmitted) {
+                                    add(JsonPrimitive(item.itemKey))
+                                }
+                            }
+                        })
+                        put("items", buildJsonArray {
+                            for (item in items) {
+                                add(
+                                    buildJsonObject {
+                                        put("item_key", item.itemKey)
+                                        put("item_type", item.itemType)
+                                        put("course_id", item.courseId)
+                                        put("due_at", item.dueAt)
+                                        put("is_completed", item.isCompleted)
+                                        put("is_overdue_unsubmitted", item.isOverdueUnsubmitted)
+                                        item.workflowState?.let { put("workflow_state", it) }
+                                        item.late?.let { put("late", it) }
+                                    }
+                                )
+                            }
+                        })
                     },
                     timestamp = now,
                 )
             )
-
-            for (item in items) {
-                add(
-                    PostHogBatchEvent(
-                        event = POSTHOG_TODO_ITEM_SEEN_EVENT,
-                        properties = buildJsonObject {
-                            put("distinct_id", distinctId)
-                            put("sync_id", syncId)
-                            put("synced_at", now)
-                            put("item_key", item.itemKey)
-                            put("item_type", item.itemType)
-                            put("course_id", item.courseId)
-                            put("course_name", item.courseName)
-                            put("item_id", item.itemId)
-                            put("title", item.title)
-                            put("due_at", item.dueAt)
-                            put("is_completed", item.isCompleted)
-                            put("is_overdue_unsubmitted", item.isOverdueUnsubmitted)
-                            item.workflowState?.let { put("workflow_state", it) }
-                            item.late?.let { put("late", it) }
-                        },
-                        timestamp = now,
-                    )
-                )
-            }
         }
 
         apiScope.launch {
@@ -522,14 +520,12 @@ object LmsApi {
     private fun List<TodoDetail>.toCommonsUnsubmittedStats(now: Instant): UnsubmittedStats {
         return toCommonsTrackingItems(
             courseId = 0,
-            courseName = "",
             now = now,
         ).toUnsubmittedStats()
     }
 
     private fun List<TodoDetail>.toCommonsTrackingItems(
         courseId: Int,
-        courseName: String,
         now: Instant,
     ): List<TodoTrackingItem> {
         val seenItemIds = mutableSetOf<Int>()
@@ -552,9 +548,6 @@ object LmsApi {
                     itemKey = "commons:$courseId:$itemId",
                     itemType = "commons",
                     courseId = courseId,
-                    courseName = courseName,
-                    itemId = itemId,
-                    title = contentData.title.orFallback(item.title.orEmpty()),
                     dueAt = contentData.due_at.orEmpty(),
                     isCompleted = item.completed == true,
                     isOverdueUnsubmitted = item.completed != true && contentData.due_at.isPastOrCurrentInstant(now),
@@ -568,7 +561,6 @@ object LmsApi {
     @OptIn(ExperimentalTime::class)
     private suspend fun buildTodoListFromSubmissions(
         courseId: Int,
-        courseName: String,
         submissions: List<TodoSubmission>,
         includeCommons: Boolean,
         includeCommonsForTracking: Boolean = false,
@@ -606,7 +598,6 @@ object LmsApi {
             val todoDetails = fetchTodoDetail(courseId)
             commonsTrackingItems = todoDetails.toCommonsTrackingItems(
                 courseId = courseId,
-                courseName = courseName,
                 now = now,
             )
             commonsStats = commonsTrackingItems.toUnsubmittedStats()
@@ -1004,7 +995,6 @@ object LmsApi {
 
                 val submissionTrackingItems = todoSubmissions.toSubmissionTrackingItems(
                     courseId = lecture.id,
-                    courseName = lecture.name,
                     now = now,
                 )
                 val stats = submissionTrackingItems.toUnsubmittedStats()
@@ -1019,7 +1009,6 @@ object LmsApi {
 
             val todoBuildResult = buildTodoListFromSubmissions(
                 courseId = lecture.id,
-                courseName = lecture.name,
                 submissions = todoSubmissions,
                 includeCommons = includeCommons,
                 includeCommonsForTracking = shouldTrackPostHog,
