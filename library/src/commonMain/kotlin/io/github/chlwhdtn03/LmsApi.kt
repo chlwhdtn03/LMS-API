@@ -89,17 +89,17 @@ object LmsApi {
         val late_at: String? = "",
     )
 
-    private data class UnsubmittedStats(
-        val assignmentTotalCount: Int = 0,
+    internal data class UnsubmittedStats(
+        val totalCount: Int = 0,
         val unsubmittedCount: Int = 0,
     ) {
         val ratio: Double
-            get() = if (assignmentTotalCount == 0) 0.0 else unsubmittedCount.toDouble() / assignmentTotalCount
+            get() = if (totalCount == 0) 0.0 else unsubmittedCount.toDouble() / totalCount
     }
 
     private data class UnsubmittedTrackingState(
         val date: String,
-        val assignmentTotalCount: Int,
+        val totalCount: Int,
         val unsubmittedCount: Int,
     )
 
@@ -116,11 +116,11 @@ object LmsApi {
 
     @Serializable
     private data class PostHogUnsubmittedRatioProperties(
-        @SerialName("assignment_total_count")
-        val assignmentTotalCount: Int,
-        @SerialName("unsubmitted_count")
+        @SerialName("current_total_count")
+        val totalCount: Int,
+        @SerialName("current_unsubmitted_count")
         val unsubmittedCount: Int,
-        @SerialName("unsubmitted_ratio")
+        @SerialName("current_unsubmitted_ratio")
         val unsubmittedRatio: Double,
         @SerialName("\$set")
         val set: PostHogCurrentUnsubmittedProperties,
@@ -130,8 +130,8 @@ object LmsApi {
 
     @Serializable
     private data class PostHogCurrentUnsubmittedProperties(
-        @SerialName("current_assignment_total_count")
-        val assignmentTotalCount: Int,
+        @SerialName("current_total_count")
+        val totalCount: Int,
         @SerialName("current_unsubmitted_count")
         val unsubmittedCount: Int,
         @SerialName("current_unsubmitted_ratio")
@@ -142,8 +142,8 @@ object LmsApi {
 
     @Serializable
     private data class PostHogInitialUnsubmittedProperties(
-        @SerialName("initial_assignment_total_count")
-        val assignmentTotalCount: Int,
+        @SerialName("initial_total_count")
+        val totalCount: Int,
         @SerialName("initial_unsubmitted_count")
         val unsubmittedCount: Int,
         @SerialName("initial_unsubmitted_ratio")
@@ -156,6 +156,11 @@ object LmsApi {
         Full,
         TodoOnly,
     }
+
+    private data class TodoBuildResult(
+        val todoList: List<TodoList>,
+        val commonsStats: UnsubmittedStats = UnsubmittedStats(),
+    )
 
     private val unsubmittedTrackingStateByDistinctId = mutableMapOf<String, UnsubmittedTrackingState>()
 
@@ -319,30 +324,26 @@ object LmsApi {
         if (workflow_state != "unsubmitted") return false
         if (late == true) return true
 
-        val dueDate = runCatching {
-            Instant.parse(cached_due_date.takeUnless { it.isNullOrBlank() } ?: return false)
-        }.getOrNull() ?: return false
-
-        return dueDate <= now
+        return cached_due_date.isPastOrCurrentInstant(now)
     }
 
     private fun List<TodoSubmission>.toUnsubmittedStats(now: Instant): UnsubmittedStats {
         val seenAssignmentIds = mutableSetOf<Int>()
-        var assignmentTotalCount = 0
+        var totalCount = 0
         var unsubmittedCount = 0
 
         for (submission in this) {
             val assignmentId = submission.assignment_id?.takeIf { it > 0 } ?: continue
             if (!seenAssignmentIds.add(assignmentId)) continue
 
-            assignmentTotalCount += 1
+            totalCount += 1
             if (submission.isOverdueUnsubmitted(now)) {
                 unsubmittedCount += 1
             }
         }
 
         return UnsubmittedStats(
-            assignmentTotalCount = assignmentTotalCount,
+            totalCount = totalCount,
             unsubmittedCount = unsubmittedCount,
         )
     }
@@ -355,13 +356,13 @@ object LmsApi {
         val previous = unsubmittedTrackingStateByDistinctId[distinctId]
         val shouldCapture = previous == null ||
             previous.date != date ||
-            previous.assignmentTotalCount != stats.assignmentTotalCount ||
+            previous.totalCount != stats.totalCount ||
             previous.unsubmittedCount != stats.unsubmittedCount
 
         if (shouldCapture) {
             unsubmittedTrackingStateByDistinctId[distinctId] = UnsubmittedTrackingState(
                 date = date,
-                assignmentTotalCount = stats.assignmentTotalCount,
+                totalCount = stats.totalCount,
                 unsubmittedCount = stats.unsubmittedCount,
             )
         }
@@ -385,17 +386,17 @@ object LmsApi {
                             event = POSTHOG_UNSUBMITTED_RATIO_EVENT,
                             distinctId = distinctId,
                             properties = PostHogUnsubmittedRatioProperties(
-                                assignmentTotalCount = stats.assignmentTotalCount,
+                                totalCount = stats.totalCount,
                                 unsubmittedCount = stats.unsubmittedCount,
                                 unsubmittedRatio = stats.ratio,
                                 set = PostHogCurrentUnsubmittedProperties(
-                                    assignmentTotalCount = stats.assignmentTotalCount,
+                                    totalCount = stats.totalCount,
                                     unsubmittedCount = stats.unsubmittedCount,
                                     unsubmittedRatio = stats.ratio,
                                     lastTodoSyncAt = now,
                                 ),
                                 setOnce = PostHogInitialUnsubmittedProperties(
-                                    assignmentTotalCount = stats.assignmentTotalCount,
+                                    totalCount = stats.totalCount,
                                     unsubmittedCount = stats.unsubmittedCount,
                                     unsubmittedRatio = stats.ratio,
                                     initialTodoSyncAt = now,
@@ -426,6 +427,13 @@ object LmsApi {
         val value = takeUnless { it.isNullOrBlank() } ?: return false
         val dueDate = runCatching { Instant.parse(value) }.getOrNull() ?: return false
         return dueDate > now
+    }
+
+    @OptIn(ExperimentalTime::class)
+    private fun String?.isPastOrCurrentInstant(now: Instant): Boolean {
+        val value = takeUnless { it.isNullOrBlank() } ?: return false
+        val dueDate = runCatching { Instant.parse(value) }.getOrNull() ?: return false
+        return dueDate <= now
     }
 
     private fun String?.orFallback(fallback: String): String {
@@ -474,15 +482,47 @@ object LmsApi {
         return todoList
     }
 
+    private fun List<TodoDetail>.toCommonsUnsubmittedStats(now: Instant): UnsubmittedStats {
+        val seenItemIds = mutableSetOf<Int>()
+        var totalCount = 0
+        var unsubmittedCount = 0
+
+        for (module in this) {
+            for (item in module.module_items.orEmpty()) {
+                val contentData = item.content_data ?: continue
+                val itemContentType = contentData.item_content_type ?: continue
+                if (itemContentType != "commons") continue
+                if (contentData.item_content_data?.duration == null) continue
+
+                val itemId = contentData.item_id?.takeIf { it > 0 }
+                    ?: item.content_id?.takeIf { it > 0 }
+                    ?: item.module_item_id?.takeIf { it > 0 }
+                    ?: continue
+                if (!seenItemIds.add(itemId)) continue
+
+                totalCount += 1
+                if (item.completed != true && contentData.due_at.isPastOrCurrentInstant(now)) {
+                    unsubmittedCount += 1
+                }
+            }
+        }
+
+        return UnsubmittedStats(
+            totalCount = totalCount,
+            unsubmittedCount = unsubmittedCount,
+        )
+    }
+
     @OptIn(ExperimentalTime::class)
     private suspend fun buildTodoListFromSubmissions(
         courseId: Int,
         submissions: List<TodoSubmission>,
         includeCommons: Boolean,
-    ): List<TodoList> {
+    ): TodoBuildResult {
         val now = Clock.System.now()
         val seenAssignmentIds = mutableSetOf<Int>()
         val todoList = mutableListOf<TodoList>()
+        var commonsStats = UnsubmittedStats()
 
         for (submission in submissions) {
             val assignmentId = submission.assignment_id?.takeIf { it > 0 } ?: continue
@@ -508,10 +548,15 @@ object LmsApi {
         }
 
         if (includeCommons) {
-            todoList += fetchTodoDetail(courseId).toCommonsTodoList(now)
+            val todoDetails = fetchTodoDetail(courseId)
+            commonsStats = todoDetails.toCommonsUnsubmittedStats(now)
+            todoList += todoDetails.toCommonsTodoList(now)
         }
 
-        return todoList.sortedBy { it.due_date }
+        return TodoBuildResult(
+            todoList = todoList.sortedBy { it.due_date },
+            commonsStats = commonsStats,
+        )
     }
 
     private fun Throwable.toResultMessage(): String {
@@ -809,6 +854,42 @@ object LmsApi {
     }
 
     @ExperimentalTime
+    internal suspend fun getUnsubmittedRatioStats(
+        term: Term,
+        loadingState: (Float) -> Unit = {},
+    ): UnsubmittedStats {
+        checkLoggedIn()
+
+        val lectures = fetchLectures(term)
+        loadingState(0.1f)
+
+        val weight = if (lectures.isEmpty()) 0f else 0.9f / lectures.size
+        var nowProgress = 0.1f
+        val now = Clock.System.now()
+        var totalCount = 0
+        var unsubmittedCount = 0
+
+        for (lecture in lectures) {
+            nowProgress += weight
+            loadingState(nowProgress)
+
+            val assignmentStats = fetchTodoSubmissions(lecture.id).toUnsubmittedStats(now)
+            totalCount += assignmentStats.totalCount
+            unsubmittedCount += assignmentStats.unsubmittedCount
+
+            val commonsStats = fetchTodoDetail(lecture.id).toCommonsUnsubmittedStats(now)
+            totalCount += commonsStats.totalCount
+            unsubmittedCount += commonsStats.unsubmittedCount
+        }
+
+        loadingState(1f)
+        return UnsubmittedStats(
+            totalCount = totalCount,
+            unsubmittedCount = unsubmittedCount,
+        )
+    }
+
+    @ExperimentalTime
     private suspend fun loadSubjects(
         term: Term,
         loadingState: (Float) -> Unit = {},
@@ -830,7 +911,7 @@ object LmsApi {
         var nowProgress = 0.3f
         val now = Clock.System.now()
         val subjects = mutableListOf<Subject>()
-        var assignmentTotalCount = 0
+        var totalCount = 0
         var unsubmittedCount = 0
 
         for (lecture in lectures) {
@@ -856,17 +937,23 @@ object LmsApi {
                 todoSubmissions = fetchTodoSubmissions(lecture.id)
 
                 val stats = todoSubmissions.toUnsubmittedStats(now)
-                assignmentTotalCount += stats.assignmentTotalCount
+                totalCount += stats.totalCount
                 unsubmittedCount += stats.unsubmittedCount
 
                 if (!lecture.activities.mayHaveTodoAssignments() && !includeCommons && todoSubmissions.isEmpty()) continue
             }
 
-            val todoList = buildTodoListFromSubmissions(
+            val todoBuildResult = buildTodoListFromSubmissions(
                 courseId = lecture.id,
                 submissions = todoSubmissions,
                 includeCommons = includeCommons,
             )
+            if (mode == SubjectLoadMode.TodoOnly) {
+                totalCount += todoBuildResult.commonsStats.totalCount
+                unsubmittedCount += todoBuildResult.commonsStats.unsubmittedCount
+            }
+
+            val todoList = todoBuildResult.todoList
             if (mode == SubjectLoadMode.TodoOnly && todoList.isEmpty()) continue
 
             subjects += Subject(
@@ -900,7 +987,7 @@ object LmsApi {
         if (mode == SubjectLoadMode.TodoOnly) {
             trackUnsubmittedRatio(
                 UnsubmittedStats(
-                    assignmentTotalCount = assignmentTotalCount,
+                    totalCount = totalCount,
                     unsubmittedCount = unsubmittedCount,
                 ),
                 postHogDistinctId,
