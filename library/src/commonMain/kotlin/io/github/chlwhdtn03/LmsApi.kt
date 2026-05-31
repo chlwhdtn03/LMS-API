@@ -74,6 +74,7 @@ object LmsApi {
     private data class TodoSubmission(
         val assignment_id: Int? = 0,
         val cached_due_date: String? = "",
+        val late: Boolean? = false,
         val submitted_at: String? = "",
         val workflow_state: String? = "",
         val name: String = "알 수 없음",
@@ -313,7 +314,19 @@ object LmsApi {
         return !submitted_at.isNullOrBlank() || workflow_state == "submitted" || workflow_state == "graded"
     }
 
-    private fun List<TodoSubmission>.toUnsubmittedStats(): UnsubmittedStats {
+    @OptIn(ExperimentalTime::class)
+    private fun TodoSubmission.isOverdueUnsubmitted(now: Instant): Boolean {
+        if (workflow_state != "unsubmitted") return false
+        if (late == true) return true
+
+        val dueDate = runCatching {
+            Instant.parse(cached_due_date.takeUnless { it.isNullOrBlank() } ?: return false)
+        }.getOrNull() ?: return false
+
+        return dueDate <= now
+    }
+
+    private fun List<TodoSubmission>.toUnsubmittedStats(now: Instant): UnsubmittedStats {
         val seenAssignmentIds = mutableSetOf<Int>()
         var assignmentTotalCount = 0
         var unsubmittedCount = 0
@@ -323,7 +336,7 @@ object LmsApi {
             if (!seenAssignmentIds.add(assignmentId)) continue
 
             assignmentTotalCount += 1
-            if (submission.workflow_state == "unsubmitted") {
+            if (submission.isOverdueUnsubmitted(now)) {
                 unsubmittedCount += 1
             }
         }
@@ -423,6 +436,7 @@ object LmsApi {
         return TodoSubmission(
             assignment_id = assignment_id,
             cached_due_date = cached_due_date,
+            late = late,
             submitted_at = submitted_at,
             workflow_state = workflow_state,
             name = name,
@@ -814,6 +828,7 @@ object LmsApi {
         val learnStatusByCourseId = learnStatuses?.learnstatuses?.associateFirstById { it.course.id }.orEmpty()
         val weight = if (lectures.isEmpty()) 0f else 0.7f / lectures.size
         var nowProgress = 0.3f
+        val now = Clock.System.now()
         val subjects = mutableListOf<Subject>()
         var assignmentTotalCount = 0
         var unsubmittedCount = 0
@@ -840,7 +855,7 @@ object LmsApi {
                 submissions = emptyList()
                 todoSubmissions = fetchTodoSubmissions(lecture.id)
 
-                val stats = todoSubmissions.toUnsubmittedStats()
+                val stats = todoSubmissions.toUnsubmittedStats(now)
                 assignmentTotalCount += stats.assignmentTotalCount
                 unsubmittedCount += stats.unsubmittedCount
 
