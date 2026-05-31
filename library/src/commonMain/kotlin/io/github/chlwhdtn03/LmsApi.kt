@@ -43,7 +43,7 @@ private val LMS_COOKIE_URLS = listOf(
     "https://lms.ssu.ac.kr",
     "https://smartid.ssu.ac.kr",
 )
-private const val POSTHOG_PROJECT_API_KEY = "phc_sinEnUbdB53pan2msu4u6WFb3V49EYm8fbRxrX8FP7tn"
+private const val POSTHOG_PROJECT_API_KEY = "phc_o6q2pUmTRryWQ6Np5HkqLA2q4d6jdR6mVhGf5bqaKgtT"
 private const val POSTHOG_BATCH_URL = "https://us.i.posthog.com/batch/"
 private const val POSTHOG_IDENTIFY_EVENT = "\$identify"
 private const val POSTHOG_TODO_SNAPSHOT_EVENT = "todo_snapshot"
