@@ -17,6 +17,10 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlin.random.Random
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -43,8 +47,10 @@ private val LMS_COOKIE_URLS = listOf(
     "https://smartid.ssu.ac.kr",
 )
 private const val POSTHOG_PROJECT_API_KEY = "phc_sinEnUbdB53pan2msu4u6WFb3V49EYm8fbRxrX8FP7tn"
-private const val POSTHOG_CAPTURE_URL = "https://us.i.posthog.com/i/v0/e/"
-private const val POSTHOG_UNSUBMITTED_RATIO_EVENT = "unsubmitted_ratio"
+private const val POSTHOG_BATCH_URL = "https://us.i.posthog.com/batch/"
+private const val POSTHOG_IDENTIFY_EVENT = "\$identify"
+private const val POSTHOG_TODO_SYNC_EVENT = "todo_sync"
+private const val POSTHOG_TODO_ITEM_SEEN_EVENT = "todo_item_seen"
 
 private fun String.withoutXssiPrefix(): String {
     val body = dropWhile { it == '\uFEFF' || it.isWhitespace() }
@@ -97,59 +103,32 @@ object LmsApi {
             get() = if (totalCount == 0) 0.0 else unsubmittedCount.toDouble() / totalCount
     }
 
-    private data class UnsubmittedTrackingState(
-        val date: String,
-        val totalCount: Int,
-        val unsubmittedCount: Int,
+    @Serializable
+    private data class PostHogBatchRequest(
+        @SerialName("api_key")
+        val apiKey: String,
+        val batch: List<PostHogBatchEvent>,
     )
 
     @Serializable
-    private data class PostHogCaptureRequest(
-        @SerialName("api_key")
-        val apiKey: String,
+    private data class PostHogBatchEvent(
         val event: String,
-        @SerialName("distinct_id")
-        val distinctId: String,
-        val properties: PostHogUnsubmittedRatioProperties,
+        val properties: JsonObject,
         val timestamp: String,
     )
 
-    @Serializable
-    private data class PostHogUnsubmittedRatioProperties(
-        @SerialName("current_total_count")
-        val totalCount: Int,
-        @SerialName("current_unsubmitted_count")
-        val unsubmittedCount: Int,
-        @SerialName("current_unsubmitted_ratio")
-        val unsubmittedRatio: Double,
-        @SerialName("\$set")
-        val set: PostHogCurrentUnsubmittedProperties,
-        @SerialName("\$set_once")
-        val setOnce: PostHogInitialUnsubmittedProperties,
-    )
-
-    @Serializable
-    private data class PostHogCurrentUnsubmittedProperties(
-        @SerialName("current_total_count")
-        val totalCount: Int,
-        @SerialName("current_unsubmitted_count")
-        val unsubmittedCount: Int,
-        @SerialName("current_unsubmitted_ratio")
-        val unsubmittedRatio: Double,
-        @SerialName("last_todo_sync_at")
-        val lastTodoSyncAt: String,
-    )
-
-    @Serializable
-    private data class PostHogInitialUnsubmittedProperties(
-        @SerialName("initial_total_count")
-        val totalCount: Int,
-        @SerialName("initial_unsubmitted_count")
-        val unsubmittedCount: Int,
-        @SerialName("initial_unsubmitted_ratio")
-        val unsubmittedRatio: Double,
-        @SerialName("initial_todo_sync_at")
-        val initialTodoSyncAt: String,
+    private data class TodoTrackingItem(
+        val itemKey: String,
+        val itemType: String,
+        val courseId: Int,
+        val courseName: String,
+        val itemId: Int,
+        val title: String,
+        val dueAt: String,
+        val isCompleted: Boolean,
+        val isOverdueUnsubmitted: Boolean,
+        val workflowState: String? = null,
+        val late: Boolean? = null,
     )
 
     private enum class SubjectLoadMode {
@@ -160,9 +139,8 @@ object LmsApi {
     private data class TodoBuildResult(
         val todoList: List<TodoList>,
         val commonsStats: UnsubmittedStats = UnsubmittedStats(),
+        val commonsTrackingItems: List<TodoTrackingItem> = emptyList(),
     )
-
-    private val unsubmittedTrackingStateByDistinctId = mutableMapOf<String, UnsubmittedTrackingState>()
 
     private fun checkLoggedIn() {
         if (!isLoggined || lmsId.isBlank()) {
@@ -348,61 +326,120 @@ object LmsApi {
         )
     }
 
-    private fun shouldCaptureUnsubmittedRatio(
-        distinctId: String,
-        date: String,
-        stats: UnsubmittedStats,
-    ): Boolean {
-        val previous = unsubmittedTrackingStateByDistinctId[distinctId]
-        val shouldCapture = previous == null ||
-            previous.date != date ||
-            previous.totalCount != stats.totalCount ||
-            previous.unsubmittedCount != stats.unsubmittedCount
+    private fun List<TodoSubmission>.toSubmissionTrackingItems(
+        courseId: Int,
+        courseName: String,
+        now: Instant,
+    ): List<TodoTrackingItem> {
+        val seenAssignmentIds = mutableSetOf<Int>()
+        val items = mutableListOf<TodoTrackingItem>()
 
-        if (shouldCapture) {
-            unsubmittedTrackingStateByDistinctId[distinctId] = UnsubmittedTrackingState(
-                date = date,
-                totalCount = stats.totalCount,
-                unsubmittedCount = stats.unsubmittedCount,
+        for (submission in this) {
+            val assignmentId = submission.assignment_id?.takeIf { it > 0 } ?: continue
+            if (!seenAssignmentIds.add(assignmentId)) continue
+
+            items += TodoTrackingItem(
+                itemKey = "submission:$courseId:$assignmentId",
+                itemType = "submission",
+                courseId = courseId,
+                courseName = courseName,
+                itemId = assignmentId,
+                title = submission.name,
+                dueAt = submission.cached_due_date.orEmpty(),
+                isCompleted = submission.isCompletedForTodo(),
+                isOverdueUnsubmitted = submission.isOverdueUnsubmitted(now),
+                workflowState = submission.workflow_state,
+                late = submission.late,
             )
         }
 
-        return shouldCapture
+        return items
     }
 
-    private fun trackUnsubmittedRatio(stats: UnsubmittedStats, postHogDistinctId: String?) {
+    private fun List<TodoTrackingItem>.toUnsubmittedStats(): UnsubmittedStats {
+        return UnsubmittedStats(
+            totalCount = size,
+            unsubmittedCount = count { it.isOverdueUnsubmitted },
+        )
+    }
+
+    private fun trackTodoSync(
+        stats: UnsubmittedStats,
+        items: List<TodoTrackingItem>,
+        postHogDistinctId: String?,
+    ) {
         val distinctId = postHogDistinctId?.trim()?.takeIf { it.isNotBlank() } ?: return
         val now = Clock.System.now().toString()
-        val today = now.substringBefore('T')
-        if (!shouldCaptureUnsubmittedRatio(distinctId, today, stats)) return
+        val syncId = "todo_sync:${Random.nextLong()}:$now"
+        val events = buildList {
+            add(
+                PostHogBatchEvent(
+                    event = POSTHOG_IDENTIFY_EVENT,
+                    properties = buildJsonObject {
+                        put("distinct_id", distinctId)
+                        put("\$set", buildJsonObject {
+                            put("last_todo_sync_at", now)
+                        })
+                        put("\$set_once", buildJsonObject {
+                            put("initial_at", now)
+                            put("initial_todo_sync_at", now)
+                            put("initial_total_count", stats.totalCount)
+                            put("initial_unsubmitted_count", stats.unsubmittedCount)
+                            put("initial_unsubmitted_ratio", stats.ratio)
+                        })
+                    },
+                    timestamp = now,
+                )
+            )
+            add(
+                PostHogBatchEvent(
+                    event = POSTHOG_TODO_SYNC_EVENT,
+                    properties = buildJsonObject {
+                        put("distinct_id", distinctId)
+                        put("sync_id", syncId)
+                        put("synced_at", now)
+                        put("snapshot_total_count", stats.totalCount)
+                        put("snapshot_unsubmitted_count", stats.unsubmittedCount)
+                        put("snapshot_unsubmitted_ratio", stats.ratio)
+                    },
+                    timestamp = now,
+                )
+            )
+
+            for (item in items) {
+                add(
+                    PostHogBatchEvent(
+                        event = POSTHOG_TODO_ITEM_SEEN_EVENT,
+                        properties = buildJsonObject {
+                            put("distinct_id", distinctId)
+                            put("sync_id", syncId)
+                            put("synced_at", now)
+                            put("item_key", item.itemKey)
+                            put("item_type", item.itemType)
+                            put("course_id", item.courseId)
+                            put("course_name", item.courseName)
+                            put("item_id", item.itemId)
+                            put("title", item.title)
+                            put("due_at", item.dueAt)
+                            put("is_completed", item.isCompleted)
+                            put("is_overdue_unsubmitted", item.isOverdueUnsubmitted)
+                            item.workflowState?.let { put("workflow_state", it) }
+                            item.late?.let { put("late", it) }
+                        },
+                        timestamp = now,
+                    )
+                )
+            }
+        }
 
         apiScope.launch {
             runCatching {
-                client.post(POSTHOG_CAPTURE_URL) {
+                client.post(POSTHOG_BATCH_URL) {
                     contentType(ContentType.Application.Json)
                     setBody(
-                        PostHogCaptureRequest(
+                        PostHogBatchRequest(
                             apiKey = POSTHOG_PROJECT_API_KEY,
-                            event = POSTHOG_UNSUBMITTED_RATIO_EVENT,
-                            distinctId = distinctId,
-                            properties = PostHogUnsubmittedRatioProperties(
-                                totalCount = stats.totalCount,
-                                unsubmittedCount = stats.unsubmittedCount,
-                                unsubmittedRatio = stats.ratio,
-                                set = PostHogCurrentUnsubmittedProperties(
-                                    totalCount = stats.totalCount,
-                                    unsubmittedCount = stats.unsubmittedCount,
-                                    unsubmittedRatio = stats.ratio,
-                                    lastTodoSyncAt = now,
-                                ),
-                                setOnce = PostHogInitialUnsubmittedProperties(
-                                    totalCount = stats.totalCount,
-                                    unsubmittedCount = stats.unsubmittedCount,
-                                    unsubmittedRatio = stats.ratio,
-                                    initialTodoSyncAt = now,
-                                ),
-                            ),
-                            timestamp = now,
+                            batch = events,
                         )
                     )
                 }
@@ -483,9 +520,20 @@ object LmsApi {
     }
 
     private fun List<TodoDetail>.toCommonsUnsubmittedStats(now: Instant): UnsubmittedStats {
+        return toCommonsTrackingItems(
+            courseId = 0,
+            courseName = "",
+            now = now,
+        ).toUnsubmittedStats()
+    }
+
+    private fun List<TodoDetail>.toCommonsTrackingItems(
+        courseId: Int,
+        courseName: String,
+        now: Instant,
+    ): List<TodoTrackingItem> {
         val seenItemIds = mutableSetOf<Int>()
-        var totalCount = 0
-        var unsubmittedCount = 0
+        val items = mutableListOf<TodoTrackingItem>()
 
         for (module in this) {
             for (item in module.module_items.orEmpty()) {
@@ -500,29 +548,36 @@ object LmsApi {
                     ?: continue
                 if (!seenItemIds.add(itemId)) continue
 
-                totalCount += 1
-                if (item.completed != true && contentData.due_at.isPastOrCurrentInstant(now)) {
-                    unsubmittedCount += 1
-                }
+                items += TodoTrackingItem(
+                    itemKey = "commons:$courseId:$itemId",
+                    itemType = "commons",
+                    courseId = courseId,
+                    courseName = courseName,
+                    itemId = itemId,
+                    title = contentData.title.orFallback(item.title.orEmpty()),
+                    dueAt = contentData.due_at.orEmpty(),
+                    isCompleted = item.completed == true,
+                    isOverdueUnsubmitted = item.completed != true && contentData.due_at.isPastOrCurrentInstant(now),
+                )
             }
         }
 
-        return UnsubmittedStats(
-            totalCount = totalCount,
-            unsubmittedCount = unsubmittedCount,
-        )
+        return items
     }
 
     @OptIn(ExperimentalTime::class)
     private suspend fun buildTodoListFromSubmissions(
         courseId: Int,
+        courseName: String,
         submissions: List<TodoSubmission>,
         includeCommons: Boolean,
+        includeCommonsForTracking: Boolean = false,
     ): TodoBuildResult {
         val now = Clock.System.now()
         val seenAssignmentIds = mutableSetOf<Int>()
         val todoList = mutableListOf<TodoList>()
         var commonsStats = UnsubmittedStats()
+        var commonsTrackingItems = emptyList<TodoTrackingItem>()
 
         for (submission in submissions) {
             val assignmentId = submission.assignment_id?.takeIf { it > 0 } ?: continue
@@ -547,15 +602,24 @@ object LmsApi {
             )
         }
 
-        if (includeCommons) {
+        if (includeCommons || includeCommonsForTracking) {
             val todoDetails = fetchTodoDetail(courseId)
-            commonsStats = todoDetails.toCommonsUnsubmittedStats(now)
-            todoList += todoDetails.toCommonsTodoList(now)
+            commonsTrackingItems = todoDetails.toCommonsTrackingItems(
+                courseId = courseId,
+                courseName = courseName,
+                now = now,
+            )
+            commonsStats = commonsTrackingItems.toUnsubmittedStats()
+
+            if (includeCommons) {
+                todoList += todoDetails.toCommonsTodoList(now)
+            }
         }
 
         return TodoBuildResult(
             todoList = todoList.sortedBy { it.due_date },
             commonsStats = commonsStats,
+            commonsTrackingItems = commonsTrackingItems,
         )
     }
 
@@ -913,6 +977,8 @@ object LmsApi {
         val subjects = mutableListOf<Subject>()
         var totalCount = 0
         var unsubmittedCount = 0
+        val shouldTrackPostHog = mode == SubjectLoadMode.TodoOnly && !postHogDistinctId.isNullOrBlank()
+        val trackingItems = mutableListOf<TodoTrackingItem>()
 
         for (lecture in lectures) {
             nowProgress += weight
@@ -936,21 +1002,34 @@ object LmsApi {
                 submissions = emptyList()
                 todoSubmissions = fetchTodoSubmissions(lecture.id)
 
-                val stats = todoSubmissions.toUnsubmittedStats(now)
+                val submissionTrackingItems = todoSubmissions.toSubmissionTrackingItems(
+                    courseId = lecture.id,
+                    courseName = lecture.name,
+                    now = now,
+                )
+                val stats = submissionTrackingItems.toUnsubmittedStats()
                 totalCount += stats.totalCount
                 unsubmittedCount += stats.unsubmittedCount
+                if (shouldTrackPostHog) {
+                    trackingItems += submissionTrackingItems
+                }
 
                 if (!lecture.activities.mayHaveTodoAssignments() && !includeCommons && todoSubmissions.isEmpty()) continue
             }
 
             val todoBuildResult = buildTodoListFromSubmissions(
                 courseId = lecture.id,
+                courseName = lecture.name,
                 submissions = todoSubmissions,
                 includeCommons = includeCommons,
+                includeCommonsForTracking = shouldTrackPostHog,
             )
             if (mode == SubjectLoadMode.TodoOnly) {
                 totalCount += todoBuildResult.commonsStats.totalCount
                 unsubmittedCount += todoBuildResult.commonsStats.unsubmittedCount
+                if (shouldTrackPostHog) {
+                    trackingItems += todoBuildResult.commonsTrackingItems
+                }
             }
 
             val todoList = todoBuildResult.todoList
@@ -985,11 +1064,12 @@ object LmsApi {
         }
 
         if (mode == SubjectLoadMode.TodoOnly) {
-            trackUnsubmittedRatio(
+            trackTodoSync(
                 UnsubmittedStats(
                     totalCount = totalCount,
                     unsubmittedCount = unsubmittedCount,
                 ),
+                trackingItems,
                 postHogDistinctId,
             )
         }
