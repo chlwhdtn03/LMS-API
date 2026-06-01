@@ -73,16 +73,6 @@ object LmsApi {
     )
 
     @Serializable
-    private data class TodoSubmission(
-        val assignment_id: Int? = 0,
-        val cached_due_date: String? = "",
-        val late: Boolean? = false,
-        val submitted_at: String? = "",
-        val workflow_state: String? = "",
-        val name: String = "알 수 없음",
-    )
-
-    @Serializable
     private data class TodoAssignmentDetail(
         val name: String? = "",
         val description: String? = "",
@@ -133,6 +123,7 @@ object LmsApi {
         val todoList: List<TodoList>,
         val commonsStats: UnsubmittedStats = UnsubmittedStats(),
         val commonsTrackingItems: List<TodoTrackingItem> = emptyList(),
+        val completedCommonsSubmissions: List<Submission> = emptyList(),
     )
 
     private val trackedTodoSnapshotDatesByDistinctId = mutableMapOf<String, String>()
@@ -223,23 +214,9 @@ object LmsApi {
     private suspend fun fetchSubmissions(courseId: Int): List<Submission> {
         return client.get("https://canvas.ssu.ac.kr/api/v1/courses/${courseId}/students/submissions") {
             url {
-                parameters.append("per_page", "50")
+                parameters.append("per_page", "100")
             }
         }.body<List<Submission>>()
-    }
-
-    private suspend fun fetchTodoSubmissions(courseId: Int): List<TodoSubmission> {
-        return client.get("https://canvas.ssu.ac.kr/api/v1/courses/${courseId}/students/submissions") {
-            url {
-                parameters.append("per_page", "50")
-                parameters.append("exclude_response_fields[]", "body")
-                parameters.append("exclude_response_fields[]", "preview_url")
-                parameters.append("exclude_response_fields[]", "attachments")
-                parameters.append("exclude_response_fields[]", "turnitin_data")
-                parameters.append("exclude_response_fields[]", "submission_comments")
-                parameters.append("exclude_response_fields[]", "rubric_assessment")
-            }
-        }.body<List<TodoSubmission>>()
     }
 
     private suspend fun fetchDiscussions(courseId: Int): List<Discussion> {
@@ -288,19 +265,19 @@ object LmsApi {
         }
     }
 
-    private fun TodoSubmission.isCompletedForTodo(): Boolean {
+    private fun Submission.isCompletedForTodo(): Boolean {
         return !submitted_at.isNullOrBlank() || workflow_state == "submitted" || workflow_state == "graded"
     }
 
     @OptIn(ExperimentalTime::class)
-    private fun TodoSubmission.isOverdueUnsubmitted(now: Instant): Boolean {
+    private fun Submission.isOverdueUnsubmitted(now: Instant): Boolean {
         if (workflow_state != "unsubmitted") return false
         if (late == true) return true
 
         return cached_due_date.isPastOrCurrentInstant(now)
     }
 
-    private fun List<TodoSubmission>.toUnsubmittedStats(now: Instant): UnsubmittedStats {
+    private fun List<Submission>.toUnsubmittedStats(now: Instant): UnsubmittedStats {
         val seenAssignmentIds = mutableSetOf<Int>()
         var totalCount = 0
         var unsubmittedCount = 0
@@ -321,7 +298,7 @@ object LmsApi {
         )
     }
 
-    private fun List<TodoSubmission>.toSubmissionTrackingItems(
+    private fun List<Submission>.toSubmissionTrackingItems(
         courseId: Int,
         now: Instant,
     ): List<TodoTrackingItem> {
@@ -475,17 +452,6 @@ object LmsApi {
         return takeUnless { it.isNullOrBlank() } ?: fallback
     }
 
-    private fun Submission.toTodoSubmission(): TodoSubmission {
-        return TodoSubmission(
-            assignment_id = assignment_id,
-            cached_due_date = cached_due_date,
-            late = late,
-            submitted_at = submitted_at,
-            workflow_state = workflow_state,
-            name = name,
-        )
-    }
-
     @OptIn(ExperimentalTime::class)
     private fun List<TodoDetail>.toCommonsTodoList(now: Instant): List<TodoList> {
         val todoList = mutableListOf<TodoList>()
@@ -558,10 +524,45 @@ object LmsApi {
         return items
     }
 
+    private fun List<TodoDetail>.toCompletedCommonsSubmissions(): List<Submission> {
+        val seenItemIds = mutableSetOf<Int>()
+        val submissions = mutableListOf<Submission>()
+
+        for (module in this) {
+            for (item in module.module_items.orEmpty()) {
+                val contentData = item.content_data ?: continue
+                val itemContentType = contentData.item_content_type ?: continue
+                if (itemContentType != "commons") continue
+                if (contentData.item_content_data?.duration == null) continue
+                if (item.completed != true) continue
+
+                val itemId = contentData.item_id?.takeIf { it > 0 }
+                    ?: item.content_id?.takeIf { it > 0 }
+                    ?: item.module_item_id?.takeIf { it > 0 }
+                    ?: continue
+                if (!seenItemIds.add(itemId)) continue
+
+                submissions += Submission(
+                    assignment_id = itemId,
+                    cached_due_date = contentData.due_at,
+                    late = false,
+                    submitted_at = "",
+                    submission_type = itemContentType,
+                    workflow_state = "submitted",
+                ).apply {
+                    name = contentData.title.orFallback(item.title.orEmpty())
+                    groupName = module.title.orFallback("동영상")
+                }
+            }
+        }
+
+        return submissions
+    }
+
     @OptIn(ExperimentalTime::class)
     private suspend fun buildTodoListFromSubmissions(
         courseId: Int,
-        submissions: List<TodoSubmission>,
+        submissions: List<Submission>,
         includeCommons: Boolean,
         includeCommonsForTracking: Boolean = false,
     ): TodoBuildResult {
@@ -570,6 +571,7 @@ object LmsApi {
         val todoList = mutableListOf<TodoList>()
         var commonsStats = UnsubmittedStats()
         var commonsTrackingItems = emptyList<TodoTrackingItem>()
+        var completedCommonsSubmissions = emptyList<Submission>()
 
         for (submission in submissions) {
             val assignmentId = submission.assignment_id?.takeIf { it > 0 } ?: continue
@@ -601,6 +603,7 @@ object LmsApi {
                 now = now,
             )
             commonsStats = commonsTrackingItems.toUnsubmittedStats()
+            completedCommonsSubmissions = todoDetails.toCompletedCommonsSubmissions()
 
             if (includeCommons) {
                 todoList += todoDetails.toCommonsTodoList(now)
@@ -611,6 +614,7 @@ object LmsApi {
             todoList = todoList.sortedBy { it.due_date },
             commonsStats = commonsStats,
             commonsTrackingItems = commonsTrackingItems,
+            completedCommonsSubmissions = completedCommonsSubmissions,
         )
     }
 
@@ -928,7 +932,7 @@ object LmsApi {
             nowProgress += weight
             loadingState(nowProgress)
 
-            val assignmentStats = fetchTodoSubmissions(lecture.id).toUnsubmittedStats(now)
+            val assignmentStats = fetchSubmissions(lecture.id).toUnsubmittedStats(now)
             totalCount += assignmentStats.totalCount
             unsubmittedCount += assignmentStats.unsubmittedCount
 
@@ -983,16 +987,13 @@ object LmsApi {
             }
             applyAssignmentMetadata(submissions, assignmentMetadataById)
 
-            val todoSubmissions: List<TodoSubmission>
+            val todoSubmissions = submissions
             val includeCommons: Boolean
 
             if (mode == SubjectLoadMode.Full) {
-                todoSubmissions = submissions.map { it.toTodoSubmission() }
                 includeCommons = true
             } else {
                 includeCommons = lecture.activities.mayHaveCommonsTodos()
-
-                todoSubmissions = fetchTodoSubmissions(lecture.id)
 
                 val submissionTrackingItems = todoSubmissions.toSubmissionTrackingItems(
                     courseId = lecture.id,
@@ -1022,8 +1023,9 @@ object LmsApi {
                 }
             }
 
+            println(lecture.name)
             val todoList = todoBuildResult.todoList
-            if (mode == SubjectLoadMode.TodoOnly && todoList.isEmpty()) continue
+            val subjectSubmissions = submissions + todoBuildResult.completedCommonsSubmissions
 
             subjects += Subject(
                 id = lecture.id,
@@ -1044,7 +1046,7 @@ object LmsApi {
                     }
                 } ?: emptyList() else emptyList(),
                 discussions = if (mode == SubjectLoadMode.Full) fetchDiscussions(lecture.id) else emptyList(),
-                submissions = submissions,
+                submissions = subjectSubmissions,
                 scoredAssignments = if (mode == SubjectLoadMode.Full) {
                     buildScoredAssignments(submissions, assignmentMetadataById)
                 } else {
