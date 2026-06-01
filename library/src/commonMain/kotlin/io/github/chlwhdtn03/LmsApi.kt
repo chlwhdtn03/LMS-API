@@ -975,22 +975,23 @@ object LmsApi {
             nowProgress += weight
             loadingState(nowProgress)
 
-            val assignmentMetadataById: Map<Int, AssignmentMetadata>
-            val submissions: List<Submission>
+            val submissions: List<Submission> = fetchSubmissions(lecture.id)
+            val assignmentMetadataById = if (submissions.isEmpty()) {
+                emptyMap()
+            } else {
+                fetchAssignmentGroups(lecture.id).toAssignmentMetadataById()
+            }
+            applyAssignmentMetadata(submissions, assignmentMetadataById)
+
             val todoSubmissions: List<TodoSubmission>
             val includeCommons: Boolean
 
             if (mode == SubjectLoadMode.Full) {
-                assignmentMetadataById = fetchAssignmentGroups(lecture.id).toAssignmentMetadataById()
-                submissions = fetchSubmissions(lecture.id)
-                applyAssignmentMetadata(submissions, assignmentMetadataById)
                 todoSubmissions = submissions.map { it.toTodoSubmission() }
                 includeCommons = true
             } else {
                 includeCommons = lecture.activities.mayHaveCommonsTodos()
 
-                assignmentMetadataById = emptyMap()
-                submissions = emptyList()
                 todoSubmissions = fetchTodoSubmissions(lecture.id)
 
                 val submissionTrackingItems = todoSubmissions.toSubmissionTrackingItems(
