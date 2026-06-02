@@ -462,6 +462,7 @@ object LmsApi {
                 val itemContentType = contentData.item_content_type ?: continue
                 if (itemContentType != "commons") continue
                 if (contentData.item_content_data?.duration == null) continue
+                if (contentData.use_attendance == false) continue
                 if (item.completed == true) continue
                 if (!contentData.due_at.isFutureInstant(now)) continue
 
@@ -503,6 +504,7 @@ object LmsApi {
                 val itemContentType = contentData.item_content_type ?: continue
                 if (itemContentType != "commons") continue
                 if (contentData.item_content_data?.duration == null) continue
+                if (contentData.use_attendance == false) continue
 
                 val itemId = contentData.item_id?.takeIf { it > 0 }
                     ?: item.content_id?.takeIf { it > 0 }
@@ -534,6 +536,7 @@ object LmsApi {
                 val itemContentType = contentData.item_content_type ?: continue
                 if (itemContentType != "commons") continue
                 if (contentData.item_content_data?.duration == null) continue
+                if (contentData.use_attendance == false) continue
                 if (item.completed != true) continue
 
                 val itemId = contentData.item_id?.takeIf { it > 0 }
