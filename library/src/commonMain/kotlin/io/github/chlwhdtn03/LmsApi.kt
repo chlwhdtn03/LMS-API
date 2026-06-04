@@ -76,6 +76,7 @@ object LmsApi {
     private data class TodoAssignmentDetail(
         val name: String? = "",
         val description: String? = "",
+        val submission_types: List<String>? = emptyList(),
         val due_at: String? = "",
         val lock_at: String? = "",
         val late_at: String? = "",
@@ -590,7 +591,10 @@ object LmsApi {
                 unit_id = 0,
                 component_id = 0,
                 generated_from_lecture_content = false,
-                component_type = "assignment",
+                component_type = when(assignmentDetail.submission_types?.first() ?: "") {
+                    "online_quiz" -> "quiz"
+                    else -> "assignment"
+                },
                 assignment_id = assignmentId,
                 title = assignmentDetail.name.orFallback(submission.name),
                 due_date = dueDate,
