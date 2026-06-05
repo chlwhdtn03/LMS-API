@@ -92,15 +92,15 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 data class Discussion(
-    val id: Int,
-    val title: String,
-    val message: String,
-    val url: String,
-    val published: Boolean,
-    val read_state: String,
-    val created_at: String,
-    val discussion_type: String,
-    val attachments: List<Attachment>,
+    val id: Int?,
+    val title: String?,
+    val message: String?,
+    val url: String?,
+    val published: Boolean?,
+    val read_state: String?,
+    val created_at: String?,
+    val discussion_type: String?,
+    val attachments: List<Attachment>?,
     val user_name: String?, //작성자
 
 )

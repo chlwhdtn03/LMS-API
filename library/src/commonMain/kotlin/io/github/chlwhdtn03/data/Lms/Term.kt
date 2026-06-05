@@ -9,6 +9,6 @@ import kotlin.time.Instant
 data class Term(
     val id: Int? = -1,
     val name: String? = null,
-    val start_at: Instant?,
-    val end_at: Instant?,
+    val start_at: Instant? = null,
+    val end_at: Instant? = null,
 )

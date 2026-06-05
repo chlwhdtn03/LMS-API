@@ -4,8 +4,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class ScoredAssignment(
-    val groupName: String,
-    val name: String,
-    val score: Double,
-    val maxScore: Double,
+    val groupName: String? = "",
+    val name: String? = "",
+    val score: Double? = 0.0,
+    val maxScore: Double? = 0.0,
 )

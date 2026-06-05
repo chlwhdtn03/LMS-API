@@ -80,6 +80,6 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 data class AssignmentGroup(
-    val name: String = "",
+    val name: String? = "",
     val assignments: List<Assignment> = emptyList(),
 )

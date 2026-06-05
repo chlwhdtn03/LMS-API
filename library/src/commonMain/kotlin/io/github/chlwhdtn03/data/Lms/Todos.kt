@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class Todos(
-    val to_dos: List<Todo>,
-    val total_count: Int,
-    val total_unread_messages: Int,
+    val to_dos: List<Todo>? = emptyList(),
+    val total_count: Int? = 0,
+    val total_unread_messages: Int? = 0,
 )

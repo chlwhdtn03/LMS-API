@@ -35,7 +35,7 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 data class Todo(
-    val course_id: Int,
-    val activities: Activity,
-    val todo_list: List<TodoList>,
+    val course_id: Int? = -1,
+    val activities: Activity? = null,
+    val todo_list: List<TodoList> ?= emptyList(),
 )

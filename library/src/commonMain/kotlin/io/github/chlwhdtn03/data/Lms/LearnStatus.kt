@@ -36,5 +36,6 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class LearnStatus(
     val course: Course,
-    val sections: List<Section>,
+    val sections: List<Section>
 )
+
