@@ -9,6 +9,7 @@ import io.ktor.client.request.*
 import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import io.ktor.serialization.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -212,12 +213,19 @@ object LmsApi {
     }
 
 
-    private suspend fun fetchSubmissions(courseId: Int): List<Submission> {
-        return client.get("https://canvas.ssu.ac.kr/api/v1/courses/${courseId}/students/submissions") {
+    private suspend fun fetchSubmissions(courseId: Int): Pair<List<Submission>, Boolean> {
+        val response = client.get("https://canvas.ssu.ac.kr/api/v1/courses/${courseId}/students/submissions") {
             url {
                 parameters.append("per_page", "100")
             }
-        }.body<List<Submission>>()
+        }
+        return try {
+            Pair(response.body<List<Submission>>(), false)
+        } catch(e: JsonConvertException) {
+            println("과목ID ${courseId}에서 권한 실패로 전체 과제 목록을 조회하지 못했습니다.")
+            println("조회 결과에 문제가 발생할 수 있습니다.")
+            return Pair(emptyList(), true)
+        }
     }
 
     private suspend fun fetchDiscussions(courseId: Int): List<Discussion> {
@@ -939,7 +947,7 @@ object LmsApi {
             nowProgress += weight
             loadingState(nowProgress)
 
-            val assignmentStats = fetchSubmissions(lecture.id).toUnsubmittedStats(now)
+            val assignmentStats = fetchSubmissions(lecture.id).first.toUnsubmittedStats(now)
             totalCount += assignmentStats.totalCount
             unsubmittedCount += assignmentStats.unsubmittedCount
 
@@ -971,7 +979,6 @@ object LmsApi {
         loadingState(0.2f)
 
         loadingState(0.3f)
-
         val learnStatusByCourseId = learnStatuses?.learnstatuses?.associateFirstById { it.course.id }.orEmpty()
         val weight = if (lectures.isEmpty()) 0f else 0.7f / lectures.size
         var nowProgress = 0.3f
@@ -985,8 +992,12 @@ object LmsApi {
         for (lecture in lectures) {
             nowProgress += weight
             loadingState(nowProgress)
+            var permissionFailed = false
+            val submissions: List<Submission> = fetchSubmissions(lecture.id).let {
+                permissionFailed = it.second
+                it.first
+            }
 
-            val submissions: List<Submission> = fetchSubmissions(lecture.id)
             val assignmentMetadataById = if (submissions.isEmpty()) {
                 emptyMap()
             } else {
@@ -1042,7 +1053,7 @@ object LmsApi {
                 professor = lecture.professors,
                 totalStudents = lecture.total_students,
                 todoList = todoList,
-                attendances = if (mode == SubjectLoadMode.Full) learnStatusByCourseId[lecture.id]?.sections?.map { section ->
+                attendances = if (mode == SubjectLoadMode.Full && !permissionFailed) learnStatusByCourseId[lecture.id]?.sections?.map { section ->
                     section.subsections.map { sub ->
                         when (sub.status) {
                             "attendance" -> AttendanceType.ATTENDANCE
@@ -1052,13 +1063,14 @@ object LmsApi {
                         }
                     }
                 } ?: emptyList() else emptyList(),
-                discussions = if (mode == SubjectLoadMode.Full) fetchDiscussions(lecture.id) else emptyList(),
+                discussions = if (mode == SubjectLoadMode.Full && !permissionFailed) fetchDiscussions(lecture.id) else emptyList(),
                 submissions = subjectSubmissions,
-                scoredAssignments = if (mode == SubjectLoadMode.Full) {
+                scoredAssignments = if (mode == SubjectLoadMode.Full && !permissionFailed) {
                     buildScoredAssignments(submissions, assignmentMetadataById)
                 } else {
                     emptyList()
                 },
+                permissionFailed = permissionFailed
             )
         }
 
