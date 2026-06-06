@@ -245,8 +245,8 @@ object LmsApi {
             for (assignment in group.assignments) {
                 if (!result.containsKey(assignment.id)) {
                     result[assignment.id] = AssignmentMetadata(
-                        groupName = group.name ?: "알 수 없음",
-                        name = assignment.name ?: "제목 없음",
+                        groupName = group.name,
+                        name = assignment.name,
                         maxScore = assignment.points_possible ?: 0.0,
                     )
                 }

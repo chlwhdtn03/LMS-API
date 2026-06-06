@@ -6,5 +6,5 @@ import kotlin.time.ExperimentalTime
 @Serializable
 @ExperimentalTime
 data class Terms(
-    val enrollment_terms: List<Term> = emptyList(),
+    val enrollment_terms: List<Term>
 )

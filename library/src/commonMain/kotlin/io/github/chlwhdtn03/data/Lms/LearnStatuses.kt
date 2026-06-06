@@ -4,6 +4,6 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class LearnStatuses(
-    val learnstatuses: List<LearnStatus>? = emptyList(),
-    val total_count: Int? = 0,
+    val learnstatuses: List<LearnStatus>,
+    val total_count: Int,
 )
