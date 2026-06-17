@@ -48,6 +48,7 @@ private const val POSTHOG_PROJECT_API_KEY = "phc_o6q2pUmTRryWQ6Np5HkqLA2q4d6jdR6
 private const val POSTHOG_BATCH_URL = "https://us.i.posthog.com/batch/"
 private const val POSTHOG_IDENTIFY_EVENT = "\$identify"
 private const val POSTHOG_TODO_SNAPSHOT_EVENT = "todo_snapshot"
+internal const val TODO_SNAPSHOT_SAMPLE_RATE = 0.2
 
 private fun String.withoutXssiPrefix(): String {
     val body = dropWhile { it == '\uFEFF' || it.isWhitespace() }
@@ -56,6 +57,10 @@ private fun String.withoutXssiPrefix(): String {
     } else {
         body
     }
+}
+
+internal fun shouldSendTodoSnapshot(sample: Double = Random.nextDouble()): Boolean {
+    return sample < TODO_SNAPSHOT_SAMPLE_RATE
 }
 
 object LmsApi {
@@ -352,6 +357,7 @@ object LmsApi {
         trackedTodoSnapshotDatesByDistinctId[distinctId] = today
 
         val syncId = "todo_sync:${Random.nextLong()}:$now"
+        val shouldSendSnapshot = shouldSendTodoSnapshot()
         val events = buildList<PostHogBatchEvent> {
             add(
                 PostHogBatchEvent(
@@ -372,48 +378,51 @@ object LmsApi {
                     timestamp = now,
                 )
             )
-            add(
-                PostHogBatchEvent(
-                    event = POSTHOG_TODO_SNAPSHOT_EVENT,
-                    properties = buildJsonObject {
-                        put("distinct_id", distinctId)
-                        put("sync_id", syncId)
-                        put("synced_at", now)
-                        put("snapshot_total_count", stats.totalCount)
-                        put("snapshot_unsubmitted_count", stats.unsubmittedCount)
-                        put("snapshot_unsubmitted_ratio", stats.ratio)
-                        put("item_keys", buildJsonArray {
-                            for (item in items) {
-                                add(JsonPrimitive(item.itemKey))
-                            }
-                        })
-                        put("overdue_unsubmitted_item_keys", buildJsonArray {
-                            for (item in items) {
-                                if (item.isOverdueUnsubmitted) {
+            if (shouldSendSnapshot) {
+                add(
+                    PostHogBatchEvent(
+                        event = POSTHOG_TODO_SNAPSHOT_EVENT,
+                        properties = buildJsonObject {
+                            put("distinct_id", distinctId)
+                            put("sync_id", syncId)
+                            put("synced_at", now)
+                            put("snapshot_sample_rate", TODO_SNAPSHOT_SAMPLE_RATE)
+                            put("snapshot_total_count", stats.totalCount)
+                            put("snapshot_unsubmitted_count", stats.unsubmittedCount)
+                            put("snapshot_unsubmitted_ratio", stats.ratio)
+                            put("item_keys", buildJsonArray {
+                                for (item in items) {
                                     add(JsonPrimitive(item.itemKey))
                                 }
-                            }
-                        })
-                        put("items", buildJsonArray {
-                            for (item in items) {
-                                add(
-                                    buildJsonObject {
-                                        put("item_key", item.itemKey)
-                                        put("item_type", item.itemType)
-                                        put("course_id", item.courseId)
-                                        put("due_at", item.dueAt)
-                                        put("is_completed", item.isCompleted)
-                                        put("is_overdue_unsubmitted", item.isOverdueUnsubmitted)
-                                        item.workflowState?.let { put("workflow_state", it) }
-                                        item.late?.let { put("late", it) }
+                            })
+                            put("overdue_unsubmitted_item_keys", buildJsonArray {
+                                for (item in items) {
+                                    if (item.isOverdueUnsubmitted) {
+                                        add(JsonPrimitive(item.itemKey))
                                     }
-                                )
-                            }
-                        })
-                    },
-                    timestamp = now,
+                                }
+                            })
+                            put("items", buildJsonArray {
+                                for (item in items) {
+                                    add(
+                                        buildJsonObject {
+                                            put("item_key", item.itemKey)
+                                            put("item_type", item.itemType)
+                                            put("course_id", item.courseId)
+                                            put("due_at", item.dueAt)
+                                            put("is_completed", item.isCompleted)
+                                            put("is_overdue_unsubmitted", item.isOverdueUnsubmitted)
+                                            item.workflowState?.let { put("workflow_state", it) }
+                                            item.late?.let { put("late", it) }
+                                        }
+                                    )
+                                }
+                            })
+                        },
+                        timestamp = now,
+                    )
                 )
-            )
+            }
         }
 
         apiScope.launch {
