@@ -1096,6 +1096,342 @@ object LmsApi {
 
         return subjects
     }
+
+    private fun escapeStr(text: String): String {
+        val owned = StringBuilder()
+        for (char in text) {
+            val code = char.code
+            val special = !(char in '0'..'9' || char in 'a'..'z' || char in 'A'..'Z' || char == '-' || char == '.' || char == '_')
+            if (special) {
+                owned.append("~")
+                val hex = code.toString(16).uppercase()
+                when (hex.length) {
+                    1 -> owned.append("000").append(hex)
+                    2 -> owned.append("00").append(hex)
+                    3 -> owned.append("0").append(hex)
+                    else -> owned.append(hex)
+                }
+            } else {
+                owned.append(char)
+            }
+        }
+        return owned.toString()
+    }
+
+    suspend fun fetchSapExtSid(): String {
+        checkLoggedIn()
+        
+        client.get("https://saint.ssu.ac.kr/webSSO/sso.jsp") {
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+            }
+        }
+        
+        client.get("https://saint.ssu.ac.kr/irj/portal") {
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+            }
+        }
+        
+        val navigateUrl = "https://saint.ssu.ac.kr/irj/servlet/prt/portal/prteventname/Navigate/prtroot/pcd!3aportal_content!2fevery_user!2fgeneral!2fdefaultAjaxframeworkContent!2fcom.sap.portal.contentarea?sapDocumentRenderingMode=Edge&windowId=WID1781845552503&NavMode=0&PrevNavTarget=navurl%3A%2F%2F1724938fdd5d98311a8647b31efd21fe"
+        val response = client.submitForm(
+            url = navigateUrl,
+            formParameters = parameters {
+                append("NavigationTarget", "navurl://1724938fdd5d98311a8647b31efd21fe")
+                append("RelativeNavBase", "")
+                append("SerKeyString", "&GUSID%3AxYRwprxKhtLv7GZy7I*JyA--e4AidKHAc4X844hr8jwhKA--")
+                append("DebugSet", "")
+                append("Command", "SUSPEND")
+                append("SerAttrKeyString", "")
+                append("SerPropString", "")
+                append("Embedded", "true")
+                append("SerWinIdString", "")
+            }
+        ) {
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+            }
+        }
+        val body = response.bodyAsText().decodeHtmlEntities()
+        val sid = body.substringAfter("sap-ext-sid=", "")
+            .substringBefore("\"")
+            .substringBefore("'")
+            .substringBefore("?")
+            .substringBefore(";")
+            .substringBefore("&")
+            .trim()
+        if (sid.isEmpty()) {
+            throw IllegalStateException("sap-ext-sid 값을 가져오지 못했습니다.")
+        }
+        return sid
+    }
+
+    suspend fun getTimetable(url: String): Timetable {
+        checkLoggedIn()
+        val response = client.get(url) {
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+            }
+        }
+        val html = response.bodyAsText().decodeHtmlEntities()
+        
+        val secureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.get(1) ?: ""
+        val formAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.get(1) ?: ""
+            
+        if (secureId.isNotBlank() && formAction.isNotBlank()) {
+            val initialDataWd01 = "ClientWidth:1920px;ClientHeight:1000px;ScreenWidth:1920px;ScreenHeight:1080px;ScreenOrientation:landscape;ThemedTableRowHeight:33px;ThemedFormLayoutRowHeight:32px;ThemedSvgLibUrls:{\"SAPGUI-icons\":\"https://ecc.ssu.ac.kr:8443/sap/public/bc/ur/nw5/themes/~cache-20210223121230/Base/baseLib/sap_fiori_3/svg/libs/SAPGUI-icons.svg\",\"SAPWeb-icons\":\"https://ecc.ssu.ac.kr:8443/sap/public/bc/ur/nw5/themes/~cache-20210223121230/Base/baseLib/sap_fiori_3/svg/libs/SAPGUI-icons.svg\"};ThemeTags:Fiori_3,Touch;ThemeID:sap_fiori_3;SapThemeID:sap_fiori_3;DeviceType:DESKTOP"
+            val e1 = "WD01_Notify~E002Id~E004WD01~E005Data~E004${escapeStr(initialDataWd01)}~E003~E002ResponseData~E004delta~E005EnqueueCardinality~E004single~E003~E002~E003"
+
+            val initialDataWd02 = "ThemedTableRowHeight:25px"
+            val e2 = "WD02_Notify~E002Id~E004WD02~E005Data~E004${escapeStr(initialDataWd02)}~E003~E002ResponseData~E004delta~E005EnqueueCardinality~E004single~E003~E002~E003"
+
+            val e3 = "_loadingPlaceholder__Load~E002Id~E004_loadingPlaceholder_~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
+
+            val e4Params = mapOf(
+                "Id" to "WD01",
+                "WindowOpenerExists" to "true",
+                "ClientURL" to url,
+                "ClientWidth" to "1920",
+                "ClientHeight" to "1000",
+                "DocumentDomain" to "ssu.ac.kr",
+                "IsTopWindow" to "true",
+                "ParentAccessible" to "true"
+            )
+            val e4ParamsSerialized = e4Params.entries.joinToString("~E005") { "${it.key}~E004${escapeStr(it.value)}" }
+            val e4 = "Custom_ClientInfos~E002${e4ParamsSerialized}~E003~E002ClientAction~E004enqueue~E005ResponseData~E004delta~E003~E002~E003"
+
+            val e5 = "Form_Request~E002FocusInfo~E004~E005Id~E004sap.client.SsrClient.form~E005Async~E004false~E005Hash~E004~E005IsDirty~E004false~E005DomChanged~E004false~E003~E002~E003~E002~E003"
+
+            val eventQueue = listOf(e1, e2, e3, e4, e5).joinToString("~E001")
+
+            val actionFullUrl = if (formAction.startsWith("http")) formAction else "https://ecc.ssu.ac.kr:8443$formAction"
+            
+            val eventResponse = client.submitForm(
+                url = actionFullUrl,
+                formParameters = parameters {
+                    append("sap-charset", "utf-8")
+                    append("sap-wd-secure-id", secureId)
+                    append("fesrAppName", "ZCMW2102")
+                    append("fesrUseBeacon", "true")
+                    append("SAPEVENTQUEUE", eventQueue)
+                }
+            ) {
+                headers {
+                    append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                    append(HttpHeaders.Accept, "*/*")
+                    append("X-Requested-With", "XMLHttpRequest")
+                    append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
+                }
+            }
+
+            val eventResponseBody = eventResponse.bodyAsText()
+            val tableHtml = if (eventResponseBody.contains("<![CDATA[")) {
+                eventResponseBody.substringAfter("<![CDATA[").substringBefore("]]>")
+            } else {
+                eventResponseBody
+            }
+
+            return parseTimetable(tableHtml)
+        }
+        
+        return parseTimetable(html)
+    }
+
+    suspend fun getTimetable(): Timetable {
+        checkLoggedIn()
+        client.get("https://saint.ssu.ac.kr/webSSO/sso.jsp") {
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+            }
+        }
+        return getTimetable("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW2102")
+    }
+
+    fun getTimetable(url: String, completion: (LmsTimetableResult) -> Unit) {
+        apiScope.launch {
+            val result = try {
+                LmsTimetableResult(success = true, timetable = getTimetable(url))
+            } catch (throwable: Throwable) {
+                LmsTimetableResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    fun getTimetable(completion: (LmsTimetableResult) -> Unit) {
+        apiScope.launch {
+            val result = try {
+                LmsTimetableResult(success = true, timetable = getTimetable())
+            } catch (throwable: Throwable) {
+                LmsTimetableResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    fun parseTimetable(html: String): Timetable {
+        // Extract Year and Semester
+        val labelRegex = Regex("""<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학년도""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        val inputValRegex = { id: String -> Regex("""id="$id"[^>]*value="([^"]+)"""", RegexOption.IGNORE_CASE) }
+        
+        var year = ""
+        labelRegex.find(html)?.groupValues?.get(1)?.let { id ->
+            year = inputValRegex(id).find(html)?.groupValues?.get(1)?.decodeHtmlEntities() ?: ""
+        }
+        
+        val semesterLabelRegex = Regex("""<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학기""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        var semester = ""
+        semesterLabelRegex.find(html)?.groupValues?.get(1)?.let { id ->
+            semester = inputValRegex(id).find(html)?.groupValues?.get(1)?.decodeHtmlEntities() ?: ""
+        }
+        
+        if (year.isBlank()) {
+            year = Regex("""value="([^"]*학년도)"""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)?.decodeHtmlEntities() ?: ""
+        }
+        if (semester.isBlank()) {
+            semester = Regex("""value="([^"]*학기)"""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)?.decodeHtmlEntities() ?: ""
+        }
+
+        // Now isolate the scroll table that contains the timetable grid
+        val targetHeaderIndex = html.indexOf("title=\"월요일\"", ignoreCase = true).let {
+            if (it == -1) html.indexOf("title=\"월\"", ignoreCase = true) else it
+        }
+        
+        var tableContent = html
+        if (targetHeaderIndex != -1) {
+            val ctIndex = html.lastIndexOf("ct=\"ST\"", targetHeaderIndex, ignoreCase = true)
+            val searchStart = if (ctIndex != -1) ctIndex else targetHeaderIndex
+            val tableStart = html.lastIndexOf("<table", searchStart, ignoreCase = true)
+            if (tableStart != -1) {
+                // Find closing tag of outer table
+                var index = tableStart
+                var openCount = 0
+                val pattern = Regex("""</?table\b""", RegexOption.IGNORE_CASE)
+                var tableEnd = html.length
+                while (true) {
+                    val match = pattern.find(html, index) ?: break
+                    if (match.value.startsWith("</", ignoreCase = true)) {
+                        openCount--
+                        if (openCount == 0) {
+                            tableEnd = match.range.last + 1
+                            break
+                        }
+                    } else {
+                        openCount++
+                    }
+                    index = match.range.last + 1
+                }
+                tableContent = html.substring(tableStart, tableEnd)
+            }
+        }
+
+        // Parse dynamic headers to map column index to day of the week
+        val thPattern = Regex("""<th\b[^>]*role="columnheader"[^>]*>""", RegexOption.IGNORE_CASE)
+        val titlePattern = Regex("""title="([^"]+)"""", RegexOption.IGNORE_CASE)
+        val lsdataPattern = Regex("""7:'([^']+)'""")
+        val textPattern = Regex("""<span[^>]*ct="CP"[^>]*>([^<]+)</span>""", RegexOption.IGNORE_CASE)
+
+        val ths = thPattern.findAll(tableContent)
+        val headers = ths.map { match ->
+            val thTag = match.value
+            var title = titlePattern.find(thTag)?.groupValues?.get(1)
+            if (title != null) return@map title
+            
+            val startIdx = tableContent.indexOf(thTag)
+            val nextThIdx = tableContent.indexOf("<th", startIdx + 1, ignoreCase = true)
+            val endIdx = if (nextThIdx != -1) nextThIdx else tableContent.length
+            val thFullContent = tableContent.substring(startIdx, endIdx)
+            
+            title = lsdataPattern.find(thFullContent)?.groupValues?.get(1)
+            if (title != null) return@map title
+            
+            title = textPattern.find(thFullContent)?.groupValues?.get(1)
+            if (title != null) return@map title
+            
+            ""
+        }.toList()
+
+        fun getDayOfWeek(colIndex: Int): String {
+            if (colIndex in headers.indices && headers[colIndex].isNotBlank()) {
+                return headers[colIndex]
+            }
+            val defaults = listOf("시간", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일")
+            return if (colIndex in defaults.indices) defaults[colIndex] else "알 수 없음"
+        }
+
+        // Extract table body / rows
+        val tbodyStart = tableContent.indexOf("<tbody", ignoreCase = true)
+        val tbodyContent = if (tbodyStart != -1) tableContent.substring(tbodyStart) else tableContent
+
+        val trRegex = Regex("""<tr\b[^>]*>(.*?)</tr>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        val tdRegex = Regex("""<td\b[^>]*cc="(\d+)"[^>]*>(.*?)</td>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+
+        val timetableCells = mutableListOf<TimetableCell>()
+
+        val trs = trRegex.findAll(tbodyContent)
+        for (trMatch in trs) {
+            val trContent = trMatch.groupValues[1]
+            val tds = tdRegex.findAll(trContent).toList()
+            if (tds.isEmpty()) continue
+
+            // Column 0 is the period info: "1 교시\n(08:00-08:50)"
+            val periodTd = tds.firstOrNull { it.groupValues[1] == "0" } ?: continue
+            val periodText = periodTd.groupValues[2].stripHtmlTags()
+            if (periodText.isBlank()) continue
+
+            val periodParts = periodText.split("\n")
+            val periodName = periodParts.getOrNull(0) ?: ""
+            val periodTime = periodParts.getOrNull(1) ?: ""
+
+            // Process remaining cells (course slots)
+            for (tdMatch in tds) {
+                val colIndexStr = tdMatch.groupValues[1]
+                val colIndex = colIndexStr.toIntOrNull() ?: continue
+                if (colIndex == 0) continue
+
+                val cellHtml = tdMatch.groupValues[2]
+                if (cellHtml.contains("lsSTEmptyRow") || cellHtml.contains("비어있음") || cellHtml.contains("비어 임")) {
+                    continue
+                }
+
+                val cellText = cellHtml.stripHtmlTags()
+                if (cellText.isBlank()) continue
+
+                val lines = cellText.split("\n")
+                val subject = lines.getOrNull(0) ?: ""
+                val professor = lines.getOrNull(1) ?: ""
+                val time = lines.getOrNull(2) ?: ""
+                val classroom = lines.getOrNull(3) ?: ""
+
+                if (subject.isNotBlank()) {
+                    timetableCells.add(
+                        TimetableCell(
+                            dayOfWeek = DayOfWeek.fromKoreanName(getDayOfWeek(colIndex)) ?: DayOfWeek.MONDAY,
+                            period = periodName,
+                            periodTime = periodTime,
+                            subject = subject,
+                            professor = professor,
+                            time = time,
+                            classroom = classroom
+                        )
+                    )
+                }
+            }
+        }
+
+        return Timetable(
+            year = year,
+            semester = semester,
+            items = timetableCells
+        )
+    }
 }
 
 fun normalizePem(raw: String): String {
@@ -1105,6 +1441,44 @@ fun normalizePem(raw: String): String {
         .replace("-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----\n")
         .replace("-----END RSA PRIVATE KEY-----", "\n-----END RSA PRIVATE KEY-----")
         .trim()
+}
+
+fun String.decodeHtmlEntities(): String {
+    val regex = Regex("&(?:#(x?[0-9a-fA-F]+)|([a-zA-Z0-9]+));")
+    return regex.replace(this) { matchResult ->
+        val hexOrDec = matchResult.groups[1]?.value
+        val name = matchResult.groups[2]?.value
+        if (hexOrDec != null) {
+            try {
+                val codePoint = if (hexOrDec.startsWith("x", ignoreCase = true)) {
+                    hexOrDec.substring(1).toInt(16)
+                } else {
+                    hexOrDec.toInt()
+                }
+                codePoint.toChar().toString()
+            } catch (e: Exception) {
+                matchResult.value
+            }
+        } else if (name != null) {
+            when (name) {
+                "nbsp" -> " "
+                "lt" -> "<"
+                "gt" -> ">"
+                "amp" -> "&"
+                "quot" -> "\""
+                "apos" -> "'"
+                else -> matchResult.value
+            }
+        } else {
+            matchResult.value
+        }
+    }
+}
+
+fun String.stripHtmlTags(): String {
+    val withNewlines = this.replace(Regex("""<br\b[^>]*>""", RegexOption.IGNORE_CASE), "\n")
+    val stripped = withNewlines.replace(Regex("""<[^>]+>"""), "")
+    return stripped.decodeHtmlEntities().trim()
 }
 
 internal expect fun pemToString(rawPem: String, rawPw: String): String

@@ -1,9 +1,6 @@
 package io.github.chlwhdtn03
 
-import io.github.chlwhdtn03.data.Lms.Info
-import io.github.chlwhdtn03.data.Lms.LmsSession
-import io.github.chlwhdtn03.data.Lms.Subject
-import io.github.chlwhdtn03.data.Lms.Term
+import io.github.chlwhdtn03.data.Lms.*
 import io.github.chlwhdtn03.data.notice.ScholarshipNotice
 import io.github.chlwhdtn03.data.notice.StartUpNotice
 import kotlin.time.ExperimentalTime
@@ -49,3 +46,10 @@ data class ScholarshipNoticesResult(
     val notices: List<ScholarshipNotice> = emptyList(),
     val errorMessage: String? = null,
 )
+
+data class LmsTimetableResult(
+    val success: Boolean,
+    val timetable: Timetable? = null,
+    val errorMessage: String? = null,
+)
+
