@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "io.github.chlwhdtn03"
-version = "1.4.6"
+version = "1.4.7"
 
 val ktor_version: String by project
 
@@ -39,12 +39,12 @@ kotlin {
         }
     }
     macosArm64()
-    val iosX64 = iosX64()
+//    val iosX64 = iosX64()
     val iosArm64 = iosArm64()
-    val iosSimulatorArm64 = iosSimulatorArm64()
+//    val iosSimulatorArm64 = iosSimulatorArm64()
 //    linuxX64()
 
-    listOf(iosX64, iosArm64, iosSimulatorArm64).forEach { iosTarget ->
+    listOf(iosArm64).forEach { iosTarget ->
         iosTarget.binaries.framework {
             baseName = "LmsApi"
             binaryOption("bundleId", "io.github.chlwhdtn03.lms")
