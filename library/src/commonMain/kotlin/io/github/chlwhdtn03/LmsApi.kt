@@ -1150,7 +1150,7 @@ object LmsApi {
 
     fun parseTimetable(html: String): Timetable {
         // Extract Year and Semester
-        val labelRegex = Regex("""<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학년도""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        val labelRegex = Regex("""(?si)<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학년도""")
         val inputValRegex = { id: String -> Regex("""id="$id"[^>]*value="([^"]+)"""", RegexOption.IGNORE_CASE) }
         
         var year = ""
@@ -1158,7 +1158,7 @@ object LmsApi {
             year = inputValRegex(id).find(html)?.groupValues?.get(1)?.decodeHtmlEntities() ?: ""
         }
         
-        val semesterLabelRegex = Regex("""<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학기""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        val semesterLabelRegex = Regex("""(?si)<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학기""")
         var semester = ""
         semesterLabelRegex.find(html)?.groupValues?.get(1)?.let { id ->
             semester = inputValRegex(id).find(html)?.groupValues?.get(1)?.decodeHtmlEntities() ?: ""
@@ -1242,8 +1242,8 @@ object LmsApi {
         val tbodyStart = tableContent.indexOf("<tbody", ignoreCase = true)
         val tbodyContent = if (tbodyStart != -1) tableContent.substring(tbodyStart) else tableContent
 
-        val trRegex = Regex("""<tr\b[^>]*>(.*?)</tr>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
-        val tdRegex = Regex("""<td\b[^>]*cc="(\d+)"[^>]*>(.*?)</td>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
+        val tdRegex = Regex("""(?si)<td\b[^>]*cc="(\d+)"[^>]*>(.*?)</td>""")
 
         val timetableCells = mutableListOf<TimetableCell>()
 
@@ -1438,8 +1438,8 @@ object LmsApi {
 
     fun parseGraduateTable(html: String): GraduateTable {
         val decodedHtml = html.decodeHtmlEntities()
-        val trRegex = Regex("""<tr\b[^>]*>(.*?)</tr>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
-        val tdRegex = Regex("""<td\b[^>]*>(.*?)</td>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
+        val tdRegex = Regex("""(?si)<td\b[^>]*>(.*?)</td>""")
         
         val cellsList = mutableListOf<GraduateTableCell>()
         val trMatches = trRegex.findAll(decodedHtml)
@@ -1517,8 +1517,8 @@ object LmsApi {
 
     fun parseTuitionTable(html: String): TuitionTable {
         val decodedHtml = html.decodeHtmlEntities()
-        val trRegex = Regex("""<tr\b[^>]*>(.*?)</tr>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
-        val tdRegex = Regex("""<td\b[^>]*>(.*?)</td>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
+        val tdRegex = Regex("""(?si)<td\b[^>]*>(.*?)</td>""")
         
         val cellsList = mutableListOf<TuitionCell>()
         val trMatches = trRegex.findAll(decodedHtml)
@@ -1578,8 +1578,8 @@ object LmsApi {
 
     fun parseScholarshipHistoryTable(html: String): ScholarshipHistoryTable {
         val decodedHtml = html.decodeHtmlEntities()
-        val trRegex = Regex("""<tr\b[^>]*>(.*?)</tr>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
-        val tdRegex = Regex("""<td\b[^>]*>(.*?)</td>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
+        val tdRegex = Regex("""(?si)<td\b[^>]*>(.*?)</td>""")
         
         val cellsList = mutableListOf<ScholarshipHistoryCell>()
         val trMatches = trRegex.findAll(decodedHtml)
