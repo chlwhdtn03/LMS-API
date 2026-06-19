@@ -53,3 +53,21 @@ data class LmsTimetableResult(
     val errorMessage: String? = null,
 )
 
+data class LmsGraduateTableResult(
+    val success: Boolean,
+    val graduateTable: GraduateTable? = null,
+    val errorMessage: String? = null,
+)
+
+data class LmsTuitionResult(
+    val success: Boolean,
+    val tuitionTable: TuitionTable? = null,
+    val errorMessage: String? = null,
+)
+
+data class LmsScholarshipHistoryResult(
+    val success: Boolean,
+    val scholarshipHistoryTable: ScholarshipHistoryTable? = null,
+    val errorMessage: String? = null,
+)
+

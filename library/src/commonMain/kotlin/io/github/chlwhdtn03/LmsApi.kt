@@ -71,6 +71,7 @@ object LmsApi {
     var isLoggined = false
     private var lmsId = ""
     private var apiBearerToken = ""
+    private val webDynproCache = mutableMapOf<String, Pair<String, String>>()
 
     private data class AssignmentMetadata(
         val groupName: String,
@@ -743,6 +744,7 @@ object LmsApi {
      * @return LMS로그인에 성공하면 true, 실패하면 false를 반환합니다.
      */
     internal suspend fun loginLMS(id: String, password: String): Boolean {
+        webDynproCache.clear()
         val loginResponse = client.submitForm(
             url = LMS_LOGIN_URL,
             formParameters = parameters {
@@ -1170,76 +1172,7 @@ object LmsApi {
     }
 
     suspend fun getTimetable(url: String): Timetable {
-        checkLoggedIn()
-        val response = client.get(url) {
-            headers {
-                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
-                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-            }
-        }
-        val html = response.bodyAsText().decodeHtmlEntities()
-        
-        val secureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
-            .find(html)?.groupValues?.get(1) ?: ""
-        val formAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
-            .find(html)?.groupValues?.get(1) ?: ""
-            
-        if (secureId.isNotBlank() && formAction.isNotBlank()) {
-            val initialDataWd01 = "ClientWidth:1920px;ClientHeight:1000px;ScreenWidth:1920px;ScreenHeight:1080px;ScreenOrientation:landscape;ThemedTableRowHeight:33px;ThemedFormLayoutRowHeight:32px;ThemedSvgLibUrls:{\"SAPGUI-icons\":\"https://ecc.ssu.ac.kr:8443/sap/public/bc/ur/nw5/themes/~cache-20210223121230/Base/baseLib/sap_fiori_3/svg/libs/SAPGUI-icons.svg\",\"SAPWeb-icons\":\"https://ecc.ssu.ac.kr:8443/sap/public/bc/ur/nw5/themes/~cache-20210223121230/Base/baseLib/sap_fiori_3/svg/libs/SAPGUI-icons.svg\"};ThemeTags:Fiori_3,Touch;ThemeID:sap_fiori_3;SapThemeID:sap_fiori_3;DeviceType:DESKTOP"
-            val e1 = "WD01_Notify~E002Id~E004WD01~E005Data~E004${escapeStr(initialDataWd01)}~E003~E002ResponseData~E004delta~E005EnqueueCardinality~E004single~E003~E002~E003"
-
-            val initialDataWd02 = "ThemedTableRowHeight:25px"
-            val e2 = "WD02_Notify~E002Id~E004WD02~E005Data~E004${escapeStr(initialDataWd02)}~E003~E002ResponseData~E004delta~E005EnqueueCardinality~E004single~E003~E002~E003"
-
-            val e3 = "_loadingPlaceholder__Load~E002Id~E004_loadingPlaceholder_~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
-
-            val e4Params = mapOf(
-                "Id" to "WD01",
-                "WindowOpenerExists" to "true",
-                "ClientURL" to url,
-                "ClientWidth" to "1920",
-                "ClientHeight" to "1000",
-                "DocumentDomain" to "ssu.ac.kr",
-                "IsTopWindow" to "true",
-                "ParentAccessible" to "true"
-            )
-            val e4ParamsSerialized = e4Params.entries.joinToString("~E005") { "${it.key}~E004${escapeStr(it.value)}" }
-            val e4 = "Custom_ClientInfos~E002${e4ParamsSerialized}~E003~E002ClientAction~E004enqueue~E005ResponseData~E004delta~E003~E002~E003"
-
-            val e5 = "Form_Request~E002FocusInfo~E004~E005Id~E004sap.client.SsrClient.form~E005Async~E004false~E005Hash~E004~E005IsDirty~E004false~E005DomChanged~E004false~E003~E002~E003~E002~E003"
-
-            val eventQueue = listOf(e1, e2, e3, e4, e5).joinToString("~E001")
-
-            val actionFullUrl = if (formAction.startsWith("http")) formAction else "https://ecc.ssu.ac.kr:8443$formAction"
-            
-            val eventResponse = client.submitForm(
-                url = actionFullUrl,
-                formParameters = parameters {
-                    append("sap-charset", "utf-8")
-                    append("sap-wd-secure-id", secureId)
-                    append("fesrAppName", "ZCMW2102")
-                    append("fesrUseBeacon", "true")
-                    append("SAPEVENTQUEUE", eventQueue)
-                }
-            ) {
-                headers {
-                    append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
-                    append(HttpHeaders.Accept, "*/*")
-                    append("X-Requested-With", "XMLHttpRequest")
-                    append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
-                }
-            }
-
-            val eventResponseBody = eventResponse.bodyAsText()
-            val tableHtml = if (eventResponseBody.contains("<![CDATA[")) {
-                eventResponseBody.substringAfter("<![CDATA[").substringBefore("]]>")
-            } else {
-                eventResponseBody
-            }
-
-            return parseTimetable(tableHtml)
-        }
-        
+        val html = fetchWebDynproHtml(url, "ZCMW2102")
         return parseTimetable(html)
     }
 
@@ -1431,6 +1364,375 @@ object LmsApi {
             semester = semester,
             items = timetableCells
         )
+    }
+
+    suspend fun getGraduateTable(url: String): GraduateTable {
+        val html = fetchWebDynproHtml(url, "ZCMW8015")
+        return parseGraduateTable(html)
+    }
+
+    internal suspend fun fetchWebDynproHtml(url: String, appName: String): String {
+        checkLoggedIn()
+        
+        val cached = webDynproCache[appName]
+        if (cached != null) {
+            val (secureId, formAction) = cached
+            try {
+                val html = postEventQueue(url, appName, secureId, formAction)
+                if (isValidWebDynproResponse(html)) {
+                    return html
+                }
+            } catch (e: Exception) {
+                // Ignore exception and fallback to fresh fetch
+            }
+            webDynproCache.remove(appName)
+        }
+
+        val response = client.get(url) {
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+            }
+        }
+        val html = response.bodyAsText().decodeHtmlEntities()
+        
+        val secureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.get(1) ?: ""
+        val formAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.get(1) ?: ""
+            
+        if (secureId.isNotBlank() && formAction.isNotBlank()) {
+            webDynproCache[appName] = Pair(secureId, formAction)
+            try {
+                val eventHtml = postEventQueue(url, appName, secureId, formAction)
+                if (isValidWebDynproResponse(eventHtml)) {
+                    return eventHtml
+                }
+            } catch (e: Exception) {
+                // Ignore exception
+            }
+        }
+        
+        return html
+    }
+
+    private fun isValidWebDynproResponse(html: String): Boolean {
+        return !html.contains("로그온 준비 중입니다.") && !html.contains("sap-system-login")
+    }
+
+    private suspend fun postEventQueue(url: String, appName: String, secureId: String, formAction: String): String {
+        val initialDataWd01 = "ClientWidth:1920px;ClientHeight:1000px;ScreenWidth:1920px;ScreenHeight:1080px;ScreenOrientation:landscape;ThemedTableRowHeight:33px;ThemedFormLayoutRowHeight:32px;ThemedSvgLibUrls:{\"SAPGUI-icons\":\"https://ecc.ssu.ac.kr:8443/sap/public/bc/ur/nw5/themes/~cache-20210223121230/Base/baseLib/sap_fiori_3/svg/libs/SAPGUI-icons.svg\",\"SAPWeb-icons\":\"https://ecc.ssu.ac.kr:8443/sap/public/bc/ur/nw5/themes/~cache-20210223121230/Base/baseLib/sap_fiori_3/svg/libs/SAPGUI-icons.svg\"};ThemeTags:Fiori_3,Touch;ThemeID:sap_fiori_3;SapThemeID:sap_fiori_3;DeviceType:DESKTOP"
+        val e1 = "WD01_Notify~E002Id~E004WD01~E005Data~E004${escapeStr(initialDataWd01)}~E003~E002ResponseData~E004delta~E005EnqueueCardinality~E004single~E003~E002~E003"
+
+        val initialDataWd02 = "ThemedTableRowHeight:25px"
+        val e2 = "WD02_Notify~E002Id~E004WD02~E005Data~E004${escapeStr(initialDataWd02)}~E003~E002ResponseData~E004delta~E005EnqueueCardinality~E004single~E003~E002~E003"
+
+        val e3 = "_loadingPlaceholder__Load~E002Id~E004_loadingPlaceholder_~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
+
+        val e4Params = mapOf(
+            "Id" to "WD01",
+            "WindowOpenerExists" to "true",
+            "ClientURL" to url,
+            "ClientWidth" to "1920",
+            "ClientHeight" to "1000",
+            "DocumentDomain" to "ssu.ac.kr",
+            "IsTopWindow" to "true",
+            "ParentAccessible" to "true"
+        )
+        val e4ParamsSerialized = e4Params.entries.joinToString("~E005") { "${it.key}~E004${escapeStr(it.value)}" }
+        val e4 = "Custom_ClientInfos~E002${e4ParamsSerialized}~E003~E002ClientAction~E004enqueue~E005ResponseData~E004delta~E003~E002~E003"
+
+        val e5 = "Form_Request~E002FocusInfo~E004~E005Id~E004sap.client.SsrClient.form~E005Async~E004false~E005Hash~E004~E005IsDirty~E004false~E005DomChanged~E004false~E003~E002~E003~E002~E003"
+
+        val eventQueue = listOf(e1, e2, e3, e4, e5).joinToString("~E001")
+
+        val actionFullUrl = if (formAction.startsWith("http")) formAction else "https://ecc.ssu.ac.kr:8443$formAction"
+        
+        val eventResponse = client.submitForm(
+            url = actionFullUrl,
+            formParameters = parameters {
+                append("sap-charset", "utf-8")
+                append("sap-wd-secure-id", secureId)
+                append("fesrAppName", appName)
+                append("fesrUseBeacon", "true")
+                append("SAPEVENTQUEUE", eventQueue)
+            }
+        ) {
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                append(HttpHeaders.Accept, "*/*")
+                append("X-Requested-With", "XMLHttpRequest")
+                append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
+            }
+        }
+
+        val eventResponseBody = eventResponse.bodyAsText()
+        val tableHtml = if (eventResponseBody.contains("<![CDATA[")) {
+            eventResponseBody.substringAfter("<![CDATA[").substringBefore("]]>")
+        } else {
+            eventResponseBody
+        }
+
+        return tableHtml
+    }
+
+    suspend fun getGraduateTable(): GraduateTable {
+        checkLoggedIn()
+        client.get("https://saint.ssu.ac.kr/webSSO/sso.jsp") {
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+            }
+        }
+        return getGraduateTable("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW8015")
+    }
+
+    fun getGraduateTable(url: String, completion: (LmsGraduateTableResult) -> Unit) {
+        apiScope.launch {
+            val result = try {
+                LmsGraduateTableResult(success = true, graduateTable = getGraduateTable(url))
+            } catch (throwable: Throwable) {
+                LmsGraduateTableResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    fun getGraduateTable(completion: (LmsGraduateTableResult) -> Unit) {
+        apiScope.launch {
+            val result = try {
+                LmsGraduateTableResult(success = true, graduateTable = getGraduateTable())
+            } catch (throwable: Throwable) {
+                LmsGraduateTableResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    fun parseGraduateTable(html: String): GraduateTable {
+        val decodedHtml = html.decodeHtmlEntities()
+        val trRegex = Regex("""<tr\b[^>]*>(.*?)</tr>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        val tdRegex = Regex("""<td\b[^>]*>(.*?)</td>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        
+        val cellsList = mutableListOf<GraduateTableCell>()
+        val trMatches = trRegex.findAll(decodedHtml)
+        var currentClassification = ""
+
+        for (trMatch in trMatches) {
+            val trContent = trMatch.groupValues[1]
+            val tds = tdRegex.findAll(trContent).toList()
+            if (tds.size == 6) {
+                val classification = tds[0].groupValues[1].stripHtmlTags()
+                val requirement = tds[1].groupValues[1].stripHtmlTags()
+                val standardValue = tds[2].groupValues[1].stripHtmlTags()
+                val calculatedValue = tds[3].groupValues[1].stripHtmlTags()
+                val difference = tds[4].groupValues[1].stripHtmlTags()
+                val result = tds[5].groupValues[1].stripHtmlTags()
+                
+                if (classification.isNotBlank() && classification != "졸업사정일자" && classification != "이수구분" && requirement.isNotBlank()) {
+                    currentClassification = classification
+                    cellsList.add(
+                        GraduateTableCell(
+                            classification = classification,
+                            requirement = requirement,
+                            standardValue = standardValue,
+                            calculatedValue = calculatedValue,
+                            difference = difference,
+                            result = result
+                        )
+                    )
+                }
+            } else if (tds.size == 5) {
+                val requirement = tds[0].groupValues[1].stripHtmlTags()
+                val standardValue = tds[1].groupValues[1].stripHtmlTags()
+                val calculatedValue = tds[2].groupValues[1].stripHtmlTags()
+                val difference = tds[3].groupValues[1].stripHtmlTags()
+                val result = tds[4].groupValues[1].stripHtmlTags()
+                
+                if (currentClassification.isNotBlank() && requirement.isNotBlank()) {
+                    cellsList.add(
+                        GraduateTableCell(
+                            classification = currentClassification,
+                            requirement = requirement,
+                            standardValue = standardValue,
+                            calculatedValue = calculatedValue,
+                            difference = difference,
+                            result = result
+                        )
+                    )
+                }
+            }
+        }
+        
+        return GraduateTable(items = cellsList)
+    }
+
+    suspend fun getTuitionTable(url: String): TuitionTable {
+        val html = fetchWebDynproHtml(url, "ZCMW6520n")
+        return parseTuitionTable(html)
+    }
+
+    suspend fun getTuitionTable(): TuitionTable {
+        checkLoggedIn()
+        client.get("https://saint.ssu.ac.kr/webSSO/sso.jsp") {
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+            }
+        }
+        return getTuitionTable("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW6520n")
+    }
+
+    fun getTuitionTable(url: String, completion: (LmsTuitionResult) -> Unit) {
+        apiScope.launch {
+            val result = try {
+                LmsTuitionResult(success = true, tuitionTable = getTuitionTable(url))
+            } catch (throwable: Throwable) {
+                LmsTuitionResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    fun getTuitionTable(completion: (LmsTuitionResult) -> Unit) {
+        apiScope.launch {
+            val result = try {
+                LmsTuitionResult(success = true, tuitionTable = getTuitionTable())
+            } catch (throwable: Throwable) {
+                LmsTuitionResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    fun parseTuitionTable(html: String): TuitionTable {
+        val decodedHtml = html.decodeHtmlEntities()
+        val trRegex = Regex("""<tr\b[^>]*>(.*?)</tr>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        val tdRegex = Regex("""<td\b[^>]*>(.*?)</td>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        
+        val cellsList = mutableListOf<TuitionCell>()
+        val trMatches = trRegex.findAll(decodedHtml)
+        for (trMatch in trMatches) {
+            val trContent = trMatch.groupValues[1]
+            val tds = tdRegex.findAll(trContent).toList()
+            if (tds.size == 14) {
+                val year = tds[1].groupValues[1].stripHtmlTags()
+                val semester = tds[2].groupValues[1].stripHtmlTags()
+                val grade = tds[3].groupValues[1].stripHtmlTags()
+                val registrationType = tds[4].groupValues[1].stripHtmlTags()
+                val registrationDate = tds[5].groupValues[1].stripHtmlTags()
+                val amount = tds[6].groupValues[1].stripHtmlTags()
+                val reduction = tds[7].groupValues[1].stripHtmlTags()
+                val paymentAmount = tds[8].groupValues[1].stripHtmlTags()
+                
+                if (year.contains("학년도") && semester.isNotBlank()) {
+                    cellsList.add(
+                        TuitionCell(
+                            year = year,
+                            semester = semester,
+                            grade = grade,
+                            registrationType = registrationType,
+                            registrationDate = registrationDate,
+                            amount = amount,
+                            reduction = reduction,
+                            paymentAmount = paymentAmount
+                        )
+                    )
+                }
+            }
+        }
+        
+        return TuitionTable(items = cellsList)
+    }
+
+    suspend fun getScholarshipHistoryTable(url: String): ScholarshipHistoryTable {
+        val html = fetchWebDynproHtml(url, "ZCMW7530n")
+        return parseScholarshipHistoryTable(html)
+    }
+
+    suspend fun getScholarshipHistoryTable(): ScholarshipHistoryTable {
+        checkLoggedIn()
+        client.get("https://saint.ssu.ac.kr/webSSO/sso.jsp") {
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+            }
+        }
+        return getScholarshipHistoryTable("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW7530n")
+    }
+
+    fun getScholarshipHistoryTable(url: String, completion: (LmsScholarshipHistoryResult) -> Unit) {
+        apiScope.launch {
+            val result = try {
+                LmsScholarshipHistoryResult(success = true, scholarshipHistoryTable = getScholarshipHistoryTable(url))
+            } catch (throwable: Throwable) {
+                LmsScholarshipHistoryResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    fun getScholarshipHistoryTable(completion: (LmsScholarshipHistoryResult) -> Unit) {
+        apiScope.launch {
+            val result = try {
+                LmsScholarshipHistoryResult(success = true, scholarshipHistoryTable = getScholarshipHistoryTable())
+            } catch (throwable: Throwable) {
+                LmsScholarshipHistoryResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    fun parseScholarshipHistoryTable(html: String): ScholarshipHistoryTable {
+        val decodedHtml = html.decodeHtmlEntities()
+        val trRegex = Regex("""<tr\b[^>]*>(.*?)</tr>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        val tdRegex = Regex("""<td\b[^>]*>(.*?)</td>""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        
+        val cellsList = mutableListOf<ScholarshipHistoryCell>()
+        val trMatches = trRegex.findAll(decodedHtml)
+        for (trMatch in trMatches) {
+            val trContent = trMatch.groupValues[1]
+            val tds = tdRegex.findAll(trContent).toList()
+            if (tds.size == 15) {
+                val year = tds[1].groupValues[1].stripHtmlTags()
+                val semester = tds[2].groupValues[1].stripHtmlTags()
+                val scholarshipName = tds[3].groupValues[1].stripHtmlTags()
+                val paymentMethod = tds[4].groupValues[1].stripHtmlTags()
+                val processStatus = tds[5].groupValues[1].stripHtmlTags()
+                val note = tds[6].groupValues[1].stripHtmlTags()
+                val dropReason = tds[7].groupValues[1].stripHtmlTags()
+                val processDate = tds[8].groupValues[1].stripHtmlTags()
+                val selectedAmount = tds[9].groupValues[1].stripHtmlTags()
+                val actualAmount = tds[10].groupValues[1].stripHtmlTags()
+                val redeemedAmount = tds[11].groupValues[1].stripHtmlTags()
+                val replacedAmount = tds[12].groupValues[1].stripHtmlTags()
+                val replacedScholarshipName = tds[13].groupValues[1].stripHtmlTags()
+                val workDepartment = tds[14].groupValues[1].stripHtmlTags()
+                
+                if (year.isNotBlank() && year.firstOrNull()?.isDigit() == true) {
+                    cellsList.add(
+                        ScholarshipHistoryCell(
+                            year = year,
+                            semester = semester,
+                            scholarshipName = scholarshipName,
+                            paymentMethod = paymentMethod,
+                            processStatus = processStatus,
+                            note = note,
+                            dropReason = dropReason,
+                            processDate = processDate,
+                            selectedAmount = selectedAmount,
+                            actualAmount = actualAmount,
+                            redeemedAmount = redeemedAmount,
+                            replacedAmount = replacedAmount,
+                            replacedScholarshipName = replacedScholarshipName,
+                            workDepartment = workDepartment
+                        )
+                    )
+                }
+            }
+        }
+        
+        return ScholarshipHistoryTable(items = cellsList)
     }
 }
 
