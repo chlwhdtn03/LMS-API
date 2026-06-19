@@ -821,6 +821,13 @@ object LmsApi {
             }
         }
 
+        client.get("https://saint.ssu.ac.kr/webSSO/sso.jsp") {
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+            }
+        }
+
         isLoggined = true
         lmsId = id
         println(lmsId + "으로 로그인에 성공하였습니다.")
@@ -1120,82 +1127,14 @@ object LmsApi {
         return owned.toString()
     }
 
-    suspend fun fetchSapExtSid(): String {
-        checkLoggedIn()
-        
-        client.get("https://saint.ssu.ac.kr/webSSO/sso.jsp") {
-            headers {
-                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
-                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-            }
-        }
-        
-        client.get("https://saint.ssu.ac.kr/irj/portal") {
-            headers {
-                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
-                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-            }
-        }
-        
-        val navigateUrl = "https://saint.ssu.ac.kr/irj/servlet/prt/portal/prteventname/Navigate/prtroot/pcd!3aportal_content!2fevery_user!2fgeneral!2fdefaultAjaxframeworkContent!2fcom.sap.portal.contentarea?sapDocumentRenderingMode=Edge&windowId=WID1781845552503&NavMode=0&PrevNavTarget=navurl%3A%2F%2F1724938fdd5d98311a8647b31efd21fe"
-        val response = client.submitForm(
-            url = navigateUrl,
-            formParameters = parameters {
-                append("NavigationTarget", "navurl://1724938fdd5d98311a8647b31efd21fe")
-                append("RelativeNavBase", "")
-                append("SerKeyString", "&GUSID%3AxYRwprxKhtLv7GZy7I*JyA--e4AidKHAc4X844hr8jwhKA--")
-                append("DebugSet", "")
-                append("Command", "SUSPEND")
-                append("SerAttrKeyString", "")
-                append("SerPropString", "")
-                append("Embedded", "true")
-                append("SerWinIdString", "")
-            }
-        ) {
-            headers {
-                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
-                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-            }
-        }
-        val body = response.bodyAsText().decodeHtmlEntities()
-        val sid = body.substringAfter("sap-ext-sid=", "")
-            .substringBefore("\"")
-            .substringBefore("'")
-            .substringBefore("?")
-            .substringBefore(";")
-            .substringBefore("&")
-            .trim()
-        if (sid.isEmpty()) {
-            throw IllegalStateException("sap-ext-sid 값을 가져오지 못했습니다.")
-        }
-        return sid
-    }
-
-    suspend fun getTimetable(url: String): Timetable {
+    private suspend fun getTimetable(url: String): Timetable {
         val html = fetchWebDynproHtml(url, "ZCMW2102")
         return parseTimetable(html)
     }
 
     suspend fun getTimetable(): Timetable {
         checkLoggedIn()
-        client.get("https://saint.ssu.ac.kr/webSSO/sso.jsp") {
-            headers {
-                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
-                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-            }
-        }
         return getTimetable("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW2102")
-    }
-
-    fun getTimetable(url: String, completion: (LmsTimetableResult) -> Unit) {
-        apiScope.launch {
-            val result = try {
-                LmsTimetableResult(success = true, timetable = getTimetable(url))
-            } catch (throwable: Throwable) {
-                LmsTimetableResult(success = false, errorMessage = throwable.toResultMessage())
-            }
-            completion(result)
-        }
     }
 
     fun getTimetable(completion: (LmsTimetableResult) -> Unit) {
@@ -1366,7 +1305,7 @@ object LmsApi {
         )
     }
 
-    suspend fun getGraduateTable(url: String): GraduateTable {
+    private suspend fun getGraduateTable(url: String): GraduateTable {
         val html = fetchWebDynproHtml(url, "ZCMW8015")
         return parseGraduateTable(html)
     }
@@ -1380,12 +1319,17 @@ object LmsApi {
             try {
                 val html = postEventQueue(url, appName, secureId, formAction)
                 if (isValidWebDynproResponse(html)) {
+                    println("[WebDynpro Cache] Hit - Reusing cached session for app: $appName")
                     return html
+                } else {
+                    println("[WebDynpro Cache] Miss (Expired/Invalid) - Cached session for app: $appName failed validation. Re-fetching fresh context...")
                 }
             } catch (e: Exception) {
-                // Ignore exception and fallback to fresh fetch
+                println("[WebDynpro Cache] Miss (Error) - Request with cached session for app: $appName failed. Re-fetching fresh context...")
             }
             webDynproCache.remove(appName)
+        } else {
+            println("[WebDynpro Cache] Miss (Cold) - No cached session found for app: $appName. Fetching fresh context...")
         }
 
         val response = client.get(url) {
@@ -1478,24 +1422,7 @@ object LmsApi {
 
     suspend fun getGraduateTable(): GraduateTable {
         checkLoggedIn()
-        client.get("https://saint.ssu.ac.kr/webSSO/sso.jsp") {
-            headers {
-                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
-                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-            }
-        }
         return getGraduateTable("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW8015")
-    }
-
-    fun getGraduateTable(url: String, completion: (LmsGraduateTableResult) -> Unit) {
-        apiScope.launch {
-            val result = try {
-                LmsGraduateTableResult(success = true, graduateTable = getGraduateTable(url))
-            } catch (throwable: Throwable) {
-                LmsGraduateTableResult(success = false, errorMessage = throwable.toResultMessage())
-            }
-            completion(result)
-        }
     }
 
     fun getGraduateTable(completion: (LmsGraduateTableResult) -> Unit) {
@@ -1567,31 +1494,14 @@ object LmsApi {
         return GraduateTable(items = cellsList)
     }
 
-    suspend fun getTuitionTable(url: String): TuitionTable {
+    private suspend fun getTuitionTable(url: String): TuitionTable {
         val html = fetchWebDynproHtml(url, "ZCMW6520n")
         return parseTuitionTable(html)
     }
 
     suspend fun getTuitionTable(): TuitionTable {
         checkLoggedIn()
-        client.get("https://saint.ssu.ac.kr/webSSO/sso.jsp") {
-            headers {
-                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
-                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-            }
-        }
         return getTuitionTable("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW6520n")
-    }
-
-    fun getTuitionTable(url: String, completion: (LmsTuitionResult) -> Unit) {
-        apiScope.launch {
-            val result = try {
-                LmsTuitionResult(success = true, tuitionTable = getTuitionTable(url))
-            } catch (throwable: Throwable) {
-                LmsTuitionResult(success = false, errorMessage = throwable.toResultMessage())
-            }
-            completion(result)
-        }
     }
 
     fun getTuitionTable(completion: (LmsTuitionResult) -> Unit) {
@@ -1645,31 +1555,14 @@ object LmsApi {
         return TuitionTable(items = cellsList)
     }
 
-    suspend fun getScholarshipHistoryTable(url: String): ScholarshipHistoryTable {
+    private suspend fun getScholarshipHistoryTable(url: String): ScholarshipHistoryTable {
         val html = fetchWebDynproHtml(url, "ZCMW7530n")
         return parseScholarshipHistoryTable(html)
     }
 
     suspend fun getScholarshipHistoryTable(): ScholarshipHistoryTable {
         checkLoggedIn()
-        client.get("https://saint.ssu.ac.kr/webSSO/sso.jsp") {
-            headers {
-                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
-                append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-            }
-        }
         return getScholarshipHistoryTable("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW7530n")
-    }
-
-    fun getScholarshipHistoryTable(url: String, completion: (LmsScholarshipHistoryResult) -> Unit) {
-        apiScope.launch {
-            val result = try {
-                LmsScholarshipHistoryResult(success = true, scholarshipHistoryTable = getScholarshipHistoryTable(url))
-            } catch (throwable: Throwable) {
-                LmsScholarshipHistoryResult(success = false, errorMessage = throwable.toResultMessage())
-            }
-            completion(result)
-        }
     }
 
     fun getScholarshipHistoryTable(completion: (LmsScholarshipHistoryResult) -> Unit) {
