@@ -1626,7 +1626,24 @@ object LmsApi {
                             paymentMethod = paymentMethod,
                             processStatus = processStatus,
                             note = note,
-                            dropReason = dropRea    suspend fun getGradeTable(year: String? = null, semester: Semester? = null): GradeTable {
+                            dropReason = dropReason,
+                            processDate = processDate,
+                            selectedAmount = selectedAmount,
+                            actualAmount = actualAmount,
+                            redeemedAmount = redeemedAmount,
+                            replacedAmount = replacedAmount,
+                            replacedScholarshipName = replacedScholarshipName,
+                            workDepartment = workDepartment
+                        )
+                    )
+                }
+            }
+        }
+        
+        return ScholarshipHistoryTable(items = cellsList)
+    }
+
+    suspend fun getGradeTable(year: String? = null, semester: Semester? = null): GradeTable {
         checkLoggedIn()
         
         var currentHtml = fetchWebDynproHtml("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMB3W0017", "ZCMB3W0017")
@@ -1695,18 +1712,6 @@ object LmsApi {
 
         cachedSecureId = nextSecureId
         cachedContextId = nextContextId
-        return parseGradeTable(resultHtml, year, semester)
-    }lication/x-www-form-urlencoded; charset=UTF-8")
-            }
-        }
-        val resultHtml = response.bodyAsText().decodeHtmlEntities()
-        
-        val nextSecureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
-            .find(resultHtml)?.groupValues?.get(1) ?: secureId
-        val nextFormAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
-            .find(resultHtml)?.groupValues?.get(1) ?: formAction
-
-        webDynproCache["ZCMB3W0017"] = Pair(nextSecureId, nextFormAction)
         return parseGradeTable(resultHtml, year, semester)
     }
 
