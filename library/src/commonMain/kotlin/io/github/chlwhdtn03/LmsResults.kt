@@ -71,3 +71,16 @@ data class LmsScholarshipHistoryResult(
     val errorMessage: String? = null,
 )
 
+data class LmsGradeResult(
+    val success: Boolean,
+    val gradeTable: GradeTable? = null,
+    val errorMessage: String? = null,
+)
+
+data class LmsSemesterGradeSummaryResult(
+    val success: Boolean,
+    val summaryTable: SemesterGradeSummaryTable? = null,
+    val errorMessage: String? = null,
+)
+
+

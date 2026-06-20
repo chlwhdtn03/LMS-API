@@ -1627,6 +1627,255 @@ object LmsApi {
         
         return ScholarshipHistoryTable(items = cellsList)
     }
+
+    suspend fun getGradeTable(year: String? = null, semester: Semester? = null): GradeTable {
+        checkLoggedIn()
+        
+        var currentHtml = fetchWebDynproHtml("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMB3W0017", "ZCMB3W0017")
+        val cached = webDynproCache["ZCMB3W0017"] ?: throw IllegalStateException("성적 페이지 세션을 초기화하지 못했습니다.")
+        var secureId = cached.first
+        var formAction = cached.second
+
+        val formReq1 = "Form_Request~E002FocusInfo~E004~E005Id~E004sap.client.SsrClient.form~E005Async~E004false~E005Hash~E004~E005IsDirty~E004false~E005DomChanged~E004false~E003~E002~E003~E002~E003"
+
+        if (year != null) {
+            val peryrLabelMatch = Regex("""<label\b[^>]*\bfor="([^"]+)"[^>]*>(?:(?!</?label\b).)*?학년도""", RegexOption.IGNORE_CASE).find(currentHtml)
+            val peryrMatch = Regex("""id="([^"]+:VIW_MAIN\.PERYR)"""").find(currentHtml)
+            val peryrId = peryrLabelMatch?.groupValues?.get(1)
+                ?: peryrMatch?.groupValues?.get(1)
+                ?: "ZCMW_PERIOD_RE.ID_0DC742680F42DA9747594D1AE51A0C69:VIW_MAIN.PERYR"
+
+            val yearEvent = "ComboBox_Select~E002Id~E004${peryrId}~E005Key~E004${year}~E005ByEnter~E004false~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
+            val eventQueue1 = listOf(yearEvent, formReq1).joinToString("~E001")
+
+            var actionFullUrl = if (formAction.startsWith("http")) formAction else "https://ecc.ssu.ac.kr:8443$formAction"
+            var response = client.submitForm(
+                url = actionFullUrl,
+                formParameters = parameters {
+                    append("sap-charset", "utf-8")
+                    append("sap-wd-secure-id", secureId)
+                    append("fesrAppName", "ZCMB3W0017")
+                    append("fesrUseBeacon", "true")
+                    append("SAPEVENTQUEUE", eventQueue1)
+                }
+            ) {
+                headers {
+                    append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                    append(HttpHeaders.Accept, "*/*")
+                    append("X-Requested-With", "XMLHttpRequest")
+                    append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
+                }
+            }
+            currentHtml = response.bodyAsText().decodeHtmlEntities()
+            
+            secureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
+                .find(currentHtml)?.groupValues?.get(1) ?: secureId
+            formAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
+                .find(currentHtml)?.groupValues?.get(1) ?: formAction
+        }
+
+        if (semester != null) {
+            val peridLabelMatch = Regex("""<label\b[^>]*\bfor="([^"]+)"[^>]*>(?:(?!</?label\b).)*?학기""", RegexOption.IGNORE_CASE).find(currentHtml)
+            val peridMatch = Regex("""id="([^"]+:VIW_MAIN\.PERID)"""").find(currentHtml)
+            val peridId = peridLabelMatch?.groupValues?.get(1)
+                ?: peridMatch?.groupValues?.get(1)
+                ?: "ZCMW_PERIOD_RE.ID_0DC742680F42DA9747594D1AE51A0C69:VIW_MAIN.PERID"
+
+            val semesterKey = semester.code
+            val semesterEvent = "ComboBox_Select~E002Id~E004${peridId}~E005Key~E004${semesterKey}~E005ByEnter~E004false~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
+            val eventQueue2 = listOf(semesterEvent, formReq1).joinToString("~E001")
+
+            var actionFullUrl = if (formAction.startsWith("http")) formAction else "https://ecc.ssu.ac.kr:8443$formAction"
+            var response = client.submitForm(
+                url = actionFullUrl,
+                formParameters = parameters {
+                    append("sap-charset", "utf-8")
+                    append("sap-wd-secure-id", secureId)
+                    append("fesrAppName", "ZCMB3W0017")
+                    append("fesrUseBeacon", "true")
+                    append("SAPEVENTQUEUE", eventQueue2)
+                }
+            ) {
+                headers {
+                    append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                    append(HttpHeaders.Accept, "*/*")
+                    append("X-Requested-With", "XMLHttpRequest")
+                    append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
+                }
+            }
+            currentHtml = response.bodyAsText().decodeHtmlEntities()
+            
+            secureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
+                .find(currentHtml)?.groupValues?.get(1) ?: secureId
+            formAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
+                .find(currentHtml)?.groupValues?.get(1) ?: formAction
+        }
+
+        val btnSearchLabelMatch = Regex("""<(?:div|button)\b[^>]*\bid="([^"]+)"[^>]*ct="B"[^>]*>(?:(?!<(?:div|button)\b).)*?조회""", RegexOption.IGNORE_CASE).find(currentHtml)
+        val btnSearchMatch = Regex("""id="([^"]+:VIW_MAIN\.BTN_SEARCH)"""").find(currentHtml)
+        val btnSearchId = btnSearchLabelMatch?.groupValues?.get(1)
+            ?: btnSearchMatch?.groupValues?.get(1)
+            ?: "ZCMB3W0017.ID_0001:VIW_MAIN.BTN_SEARCH"
+
+        val buttonEvent = "Button_Press~E002Id~E004${btnSearchId}~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
+        val focusInfo = escapeStr("{\"sFocussedId\":\"${btnSearchId}\"}")
+        val buttonFormReq = "Form_Request~E002Id~E004sap.client.SsrClient.form~E005Async~E004false~E005FocusInfo~E004${focusInfo}~E005Hash~E004~E005DomChanged~E004false~E005IsDirty~E004false~E003~E002ResponseData~E004delta~E003~E002~E003"
+        val eventQueue3 = listOf(buttonEvent, buttonFormReq).joinToString("~E001")
+
+        val actionFullUrl = if (formAction.startsWith("http")) formAction else "https://ecc.ssu.ac.kr:8443$formAction"
+        val response = client.submitForm(
+            url = actionFullUrl,
+            formParameters = parameters {
+                append("sap-charset", "utf-8")
+                append("sap-wd-secure-id", secureId)
+                append("fesrAppName", "ZCMB3W0017")
+                append("fesrUseBeacon", "true")
+                append("SAPEVENTQUEUE", eventQueue3)
+            }
+        ) {
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                append(HttpHeaders.Accept, "*/*")
+                append("X-Requested-With", "XMLHttpRequest")
+                append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
+            }
+        }
+        val resultHtml = response.bodyAsText().decodeHtmlEntities()
+        
+        webDynproCache["ZCMB3W0017"] = Pair(secureId, formAction)
+        return parseGradeTable(resultHtml)
+    }
+
+    fun getGradeTable(year: String?, semester: Semester?, completion: (LmsGradeResult) -> Unit) {
+        apiScope.launch {
+            val result = try {
+                LmsGradeResult(success = true, gradeTable = getGradeTable(year, semester))
+            } catch (throwable: Throwable) {
+                LmsGradeResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    fun getGradeTable(completion: (LmsGradeResult) -> Unit) {
+        getGradeTable(null, null, completion)
+    }
+
+    suspend fun getSemesterGradeSummaryTable(): SemesterGradeSummaryTable {
+        checkLoggedIn()
+        val initialHtml = fetchWebDynproHtml("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMB3W0017", "ZCMB3W0017")
+        return parseSemesterGradeSummaryTable(initialHtml)
+    }
+
+    fun getSemesterGradeSummaryTable(completion: (LmsSemesterGradeSummaryResult) -> Unit) {
+        apiScope.launch {
+            val result = try {
+                LmsSemesterGradeSummaryResult(success = true, summaryTable = getSemesterGradeSummaryTable())
+            } catch (throwable: Throwable) {
+                LmsSemesterGradeSummaryResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    fun parseSemesterGradeSummaryTable(html: String): SemesterGradeSummaryTable {
+        val decodedHtml = html.decodeHtmlEntities()
+        val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
+        val tdRegex = Regex("""(?si)<(td|th)\b[^>]*>(.*?)</\1>""")
+        
+        val cellsList = mutableListOf<SemesterGradeSummaryCell>()
+        val trMatches = trRegex.findAll(decodedHtml).toList()
+        
+        for (trMatch in trMatches) {
+            val trContent = trMatch.groupValues[1]
+            val tds = tdRegex.findAll(trContent).map { it.groupValues[2].stripHtmlTags() }.toList()
+            
+            // Semester summary table rows have 14 columns
+            if (tds.size == 14) {
+                val year = tds[1].trim()
+                val semesterName = tds[2].trim()
+                
+                // Academic year should look like a year (e.g. 4-digit number)
+                if (year.length == 4 && year.all { it.isDigit() } && semesterName.isNotBlank()) {
+                    val semesterEnum = Semester.fromName(semesterName)
+                    val cell = SemesterGradeSummaryCell(
+                        year = year,
+                        semester = semesterEnum,
+                        attemptedCredits = tds[3].trim(),
+                        earnedCredits = tds[4].trim(),
+                        pfCredits = tds[5].trim(),
+                        gpa = tds[6].trim(),
+                        gpaSum = tds[7].trim(),
+                        arithmeticMean = tds[8].trim(),
+                        semesterRank = tds[9].trim(),
+                        totalRank = tds[10].trim(),
+                        academicWarning = tds[11].trim(),
+                        consultationStatus = tds[12].trim(),
+                        failedYearStatus = tds[13].trim()
+                    )
+                    cellsList.add(cell)
+                }
+            }
+        }
+        
+        return SemesterGradeSummaryTable(items = cellsList)
+    }
+
+    fun parseGradeTable(html: String): GradeTable {
+        val decodedHtml = html.decodeHtmlEntities()
+        val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
+        val tdRegex = Regex("""(?si)<(td|th)\b[^>]*>(.*?)</\1>""")
+        
+        val cellsList = mutableListOf<GradeCell>()
+        val trMatches = trRegex.findAll(decodedHtml).toList()
+        
+        for ((index, trMatch) in trMatches.withIndex()) {
+            val trContent = trMatch.groupValues[1]
+            val tds = tdRegex.findAll(trContent).map { it.groupValues[2].stripHtmlTags() }.toList()
+            
+            // Detailed grade rows in Web Dynpro have 9 columns:
+            // 0: Selection/Accessibility helper
+            // 1: Grade (등급)
+            // 2: Detail GPA (상세성적)
+            // 3: Subject Name (과목명)
+            // 4: Classification (이수구분)
+            // 5: Credits (과목학점)
+            // 6: Professor (교수명)
+            // 7: Notes (비고)
+            // 8: Subject Code (과목코드)
+            if (tds.size == 9) {
+                val subjectCode = tds[8].trim()
+                val subjectName = tds[3].trim()
+                
+                // Subject code should be numeric and at least 7 digits (normally 8 in u-saint)
+                if (subjectCode.length >= 7 && subjectCode.all { it.isDigit() } && subjectName.isNotBlank()) {
+                    val grade = tds[1].trim()
+                    val gradePoint = tds[2].trim()
+                    val classification = tds[4].trim()
+                    val credits = tds[5].trim()
+                    val professor = tds[6].trim()
+                    
+                    val cell = GradeCell(
+                        subjectCode = subjectCode,
+                        subjectName = subjectName,
+                        classification = classification,
+                        credits = credits,
+                        grade = grade,
+                        gradePoint = gradePoint,
+                        professor = professor
+                    )
+                    cellsList.add(cell)
+                }
+            }
+        }
+        
+        if (cellsList.isEmpty()) {
+            println("[DEBUG] Grade cells list is empty! Printing decoded HTML first 3000 chars:")
+            println(decodedHtml.take(3000))
+        }
+        
+        return GradeTable(items = cellsList)
+    }
 }
 
 fun normalizePem(raw: String): String {
