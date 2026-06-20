@@ -11,7 +11,8 @@ enum class Semester(val code: String, val nameKor: String) {
 
     companion object {
         fun fromName(name: String): Semester? {
-            return entries.find { name.contains(it.nameKor) || name.contains(it.name) }
+            val cleanName = name.replace(" ", "")
+            return entries.find { cleanName.contains(it.nameKor) || cleanName.contains(it.name) }
         }
         fun fromCode(code: String): Semester? {
             return entries.find { it.code == code }

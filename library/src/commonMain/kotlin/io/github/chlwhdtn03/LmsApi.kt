@@ -71,7 +71,8 @@ object LmsApi {
     var isLoggined = false
     private var lmsId = ""
     private var apiBearerToken = ""
-    private val webDynproCache = mutableMapOf<String, Pair<String, String>>()
+    private var cachedSecureId = ""
+    private var cachedContextId = ""
 
     private data class AssignmentMetadata(
         val groupName: String,
@@ -744,7 +745,8 @@ object LmsApi {
      * @return LMS로그인에 성공하면 true, 실패하면 false를 반환합니다.
      */
     internal suspend fun loginLMS(id: String, password: String): Boolean {
-        webDynproCache.clear()
+        cachedSecureId = ""
+        cachedContextId = ""
         val loginResponse = client.submitForm(
             url = LMS_LOGIN_URL,
             formParameters = parameters {
@@ -1313,9 +1315,10 @@ object LmsApi {
     internal suspend fun fetchWebDynproHtml(url: String, appName: String): String {
         checkLoggedIn()
         
-        val cached = webDynproCache[appName]
-        if (cached != null) {
-            val (secureId, formAction) = cached
+        val secureId = cachedSecureId
+        val contextId = cachedContextId
+        if (secureId.isNotBlank() && contextId.isNotBlank()) {
+            val formAction = "/sap/bc/webdynpro/SAP/$appName?sap-contextid=$contextId"
             try {
                 val html = postEventQueue(url, appName, secureId, formAction)
                 if (isValidWebDynproResponse(html)) {
@@ -1327,7 +1330,8 @@ object LmsApi {
             } catch (e: Exception) {
                 println("[WebDynpro Cache] Miss (Error) - Request with cached session for app: $appName failed. Re-fetching fresh context...")
             }
-            webDynproCache.remove(appName)
+            cachedSecureId = ""
+            cachedContextId = ""
         } else {
             println("[WebDynpro Cache] Miss (Cold) - No cached session found for app: $appName. Fetching fresh context...")
         }
@@ -1340,16 +1344,27 @@ object LmsApi {
         }
         val html = response.bodyAsText().decodeHtmlEntities()
         
-        val secureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
+        val nextSecureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
             .find(html)?.groupValues?.get(1) ?: ""
-        val formAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
+        val nextFormAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
             .find(html)?.groupValues?.get(1) ?: ""
+        val nextContextId = Regex("""sap-contextid=([^&"]+)""").find(nextFormAction)?.groupValues?.get(1) ?: ""
             
-        if (secureId.isNotBlank() && formAction.isNotBlank()) {
-            webDynproCache[appName] = Pair(secureId, formAction)
+        if (nextSecureId.isNotBlank() && nextContextId.isNotBlank()) {
+            cachedSecureId = nextSecureId
+            cachedContextId = nextContextId
+            val finalFormAction = "/sap/bc/webdynpro/SAP/$appName?sap-contextid=$nextContextId"
             try {
-                val eventHtml = postEventQueue(url, appName, secureId, formAction)
+                val eventHtml = postEventQueue(url, appName, nextSecureId, finalFormAction)
                 if (isValidWebDynproResponse(eventHtml)) {
+                    val finalSecureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
+                        .find(eventHtml)?.groupValues?.get(1) ?: nextSecureId
+                    val finalFormActionNew = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
+                        .find(eventHtml)?.groupValues?.get(1) ?: finalFormAction
+                    val finalContextId = Regex("""sap-contextid=([^&"]+)""").find(finalFormActionNew)?.groupValues?.get(1) ?: nextContextId
+                    
+                    cachedSecureId = finalSecureId
+                    cachedContextId = finalContextId
                     return eventHtml
                 }
             } catch (e: Exception) {
@@ -1611,105 +1626,28 @@ object LmsApi {
                             paymentMethod = paymentMethod,
                             processStatus = processStatus,
                             note = note,
-                            dropReason = dropReason,
-                            processDate = processDate,
-                            selectedAmount = selectedAmount,
-                            actualAmount = actualAmount,
-                            redeemedAmount = redeemedAmount,
-                            replacedAmount = replacedAmount,
-                            replacedScholarshipName = replacedScholarshipName,
-                            workDepartment = workDepartment
-                        )
-                    )
-                }
-            }
-        }
-        
-        return ScholarshipHistoryTable(items = cellsList)
-    }
-
-    suspend fun getGradeTable(year: String? = null, semester: Semester? = null): GradeTable {
+                            dropReason = dropRea    suspend fun getGradeTable(year: String? = null, semester: Semester? = null): GradeTable {
         checkLoggedIn()
         
         var currentHtml = fetchWebDynproHtml("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMB3W0017", "ZCMB3W0017")
-        val cached = webDynproCache["ZCMB3W0017"] ?: throw IllegalStateException("성적 페이지 세션을 초기화하지 못했습니다.")
-        var secureId = cached.first
-        var formAction = cached.second
-
-        val formReq1 = "Form_Request~E002FocusInfo~E004~E005Id~E004sap.client.SsrClient.form~E005Async~E004false~E005Hash~E004~E005IsDirty~E004false~E005DomChanged~E004false~E003~E002~E003~E002~E003"
-
-        if (year != null) {
-            val peryrLabelMatch = Regex("""<label\b[^>]*\bfor="([^"]+)"[^>]*>(?:(?!</?label\b).)*?학년도""", RegexOption.IGNORE_CASE).find(currentHtml)
-            val peryrMatch = Regex("""id="([^"]+:VIW_MAIN\.PERYR)"""").find(currentHtml)
-            val peryrId = peryrLabelMatch?.groupValues?.get(1)
-                ?: peryrMatch?.groupValues?.get(1)
-                ?: "ZCMW_PERIOD_RE.ID_0DC742680F42DA9747594D1AE51A0C69:VIW_MAIN.PERYR"
-
-            val yearEvent = "ComboBox_Select~E002Id~E004${peryrId}~E005Key~E004${year}~E005ByEnter~E004false~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
-            val eventQueue1 = listOf(yearEvent, formReq1).joinToString("~E001")
-
-            var actionFullUrl = if (formAction.startsWith("http")) formAction else "https://ecc.ssu.ac.kr:8443$formAction"
-            var response = client.submitForm(
-                url = actionFullUrl,
-                formParameters = parameters {
-                    append("sap-charset", "utf-8")
-                    append("sap-wd-secure-id", secureId)
-                    append("fesrAppName", "ZCMB3W0017")
-                    append("fesrUseBeacon", "true")
-                    append("SAPEVENTQUEUE", eventQueue1)
-                }
-            ) {
-                headers {
-                    append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
-                    append(HttpHeaders.Accept, "*/*")
-                    append("X-Requested-With", "XMLHttpRequest")
-                    append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
-                }
-            }
-            currentHtml = response.bodyAsText().decodeHtmlEntities()
-            
-            secureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
-                .find(currentHtml)?.groupValues?.get(1) ?: secureId
-            formAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
-                .find(currentHtml)?.groupValues?.get(1) ?: formAction
+        val secureId = cachedSecureId
+        val contextId = cachedContextId
+        if (secureId.isBlank() || contextId.isBlank()) {
+            throw IllegalStateException("성적 페이지 세션을 초기화하지 못했습니다.")
         }
+        val formAction = "/sap/bc/webdynpro/SAP/ZCMB3W0017?sap-contextid=$contextId"
 
-        if (semester != null) {
-            val peridLabelMatch = Regex("""<label\b[^>]*\bfor="([^"]+)"[^>]*>(?:(?!</?label\b).)*?학기""", RegexOption.IGNORE_CASE).find(currentHtml)
-            val peridMatch = Regex("""id="([^"]+:VIW_MAIN\.PERID)"""").find(currentHtml)
-            val peridId = peridLabelMatch?.groupValues?.get(1)
-                ?: peridMatch?.groupValues?.get(1)
-                ?: "ZCMW_PERIOD_RE.ID_0DC742680F42DA9747594D1AE51A0C69:VIW_MAIN.PERID"
+        val peryrLabelMatch = Regex("""<label\b[^>]*\bfor="([^"]+)"[^>]*>(?:(?!</?label\b).)*?학년도""", RegexOption.IGNORE_CASE).find(currentHtml)
+        val peryrMatch = Regex("""id="([^"]+:VIW_MAIN\.PERYR)"""").find(currentHtml)
+        val peryrId = peryrLabelMatch?.groupValues?.get(1)
+            ?: peryrMatch?.groupValues?.get(1)
+            ?: "ZCMW_PERIOD_RE.ID_0DC742680F42DA9747594D1AE51A0C69:VIW_MAIN.PERYR"
 
-            val semesterKey = semester.code
-            val semesterEvent = "ComboBox_Select~E002Id~E004${peridId}~E005Key~E004${semesterKey}~E005ByEnter~E004false~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
-            val eventQueue2 = listOf(semesterEvent, formReq1).joinToString("~E001")
-
-            var actionFullUrl = if (formAction.startsWith("http")) formAction else "https://ecc.ssu.ac.kr:8443$formAction"
-            var response = client.submitForm(
-                url = actionFullUrl,
-                formParameters = parameters {
-                    append("sap-charset", "utf-8")
-                    append("sap-wd-secure-id", secureId)
-                    append("fesrAppName", "ZCMB3W0017")
-                    append("fesrUseBeacon", "true")
-                    append("SAPEVENTQUEUE", eventQueue2)
-                }
-            ) {
-                headers {
-                    append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
-                    append(HttpHeaders.Accept, "*/*")
-                    append("X-Requested-With", "XMLHttpRequest")
-                    append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
-                }
-            }
-            currentHtml = response.bodyAsText().decodeHtmlEntities()
-            
-            secureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
-                .find(currentHtml)?.groupValues?.get(1) ?: secureId
-            formAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
-                .find(currentHtml)?.groupValues?.get(1) ?: formAction
-        }
+        val peridLabelMatch = Regex("""<label\b[^>]*\bfor="([^"]+)"[^>]*>(?:(?!</label>).)*?학기""", RegexOption.IGNORE_CASE).find(currentHtml)
+        val peridMatch = Regex("""id="([^"]+:VIW_MAIN\.PERID)"""").find(currentHtml)
+        val peridId = peridLabelMatch?.groupValues?.get(1)
+            ?: peridMatch?.groupValues?.get(1)
+            ?: "ZCMW_PERIOD_RE.ID_0DC742680F42DA9747594D1AE51A0C69:VIW_MAIN.PERID"
 
         val btnSearchLabelMatch = Regex("""<(?:div|button)\b[^>]*\bid="([^"]+)"[^>]*ct="B"[^>]*>(?:(?!<(?:div|button)\b).)*?조회""", RegexOption.IGNORE_CASE).find(currentHtml)
         val btnSearchMatch = Regex("""id="([^"]+:VIW_MAIN\.BTN_SEARCH)"""").find(currentHtml)
@@ -1720,7 +1658,14 @@ object LmsApi {
         val buttonEvent = "Button_Press~E002Id~E004${btnSearchId}~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
         val focusInfo = escapeStr("{\"sFocussedId\":\"${btnSearchId}\"}")
         val buttonFormReq = "Form_Request~E002Id~E004sap.client.SsrClient.form~E005Async~E004false~E005FocusInfo~E004${focusInfo}~E005Hash~E004~E005DomChanged~E004false~E005IsDirty~E004false~E003~E002ResponseData~E004delta~E003~E002~E003"
-        val eventQueue3 = listOf(buttonEvent, buttonFormReq).joinToString("~E001")
+
+        val eventQueue = if (year != null && semester != null) {
+            val yearEvent = "ComboBox_Select~E002Id~E004${peryrId}~E005Key~E004${year}~E005ByEnter~E004false~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
+            val semesterEvent = "ComboBox_Select~E002Id~E004${peridId}~E005Key~E004${semester.code}~E005ByEnter~E004false~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
+            listOf(yearEvent, semesterEvent, buttonEvent, buttonFormReq).joinToString("~E001")
+        } else {
+            listOf(buttonEvent, buttonFormReq).joinToString("~E001")
+        }
 
         val actionFullUrl = if (formAction.startsWith("http")) formAction else "https://ecc.ssu.ac.kr:8443$formAction"
         val response = client.submitForm(
@@ -1730,7 +1675,7 @@ object LmsApi {
                 append("sap-wd-secure-id", secureId)
                 append("fesrAppName", "ZCMB3W0017")
                 append("fesrUseBeacon", "true")
-                append("SAPEVENTQUEUE", eventQueue3)
+                append("SAPEVENTQUEUE", eventQueue)
             }
         ) {
             headers {
@@ -1742,8 +1687,27 @@ object LmsApi {
         }
         val resultHtml = response.bodyAsText().decodeHtmlEntities()
         
-        webDynproCache["ZCMB3W0017"] = Pair(secureId, formAction)
-        return parseGradeTable(resultHtml)
+        val nextSecureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(resultHtml)?.groupValues?.get(1) ?: secureId
+        val nextFormAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(resultHtml)?.groupValues?.get(1) ?: formAction
+        val nextContextId = Regex("""sap-contextid=([^&"]+)""").find(nextFormAction)?.groupValues?.get(1) ?: contextId
+
+        cachedSecureId = nextSecureId
+        cachedContextId = nextContextId
+        return parseGradeTable(resultHtml, year, semester)
+    }lication/x-www-form-urlencoded; charset=UTF-8")
+            }
+        }
+        val resultHtml = response.bodyAsText().decodeHtmlEntities()
+        
+        val nextSecureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(resultHtml)?.groupValues?.get(1) ?: secureId
+        val nextFormAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(resultHtml)?.groupValues?.get(1) ?: formAction
+
+        webDynproCache["ZCMB3W0017"] = Pair(nextSecureId, nextFormAction)
+        return parseGradeTable(resultHtml, year, semester)
     }
 
     fun getGradeTable(year: String?, semester: Semester?, completion: (LmsGradeResult) -> Unit) {
@@ -1821,8 +1785,34 @@ object LmsApi {
         return SemesterGradeSummaryTable(items = cellsList)
     }
 
-    fun parseGradeTable(html: String): GradeTable {
+    fun parseGradeTable(html: String, defaultYear: String? = null, defaultSemester: Semester? = null): GradeTable {
         val decodedHtml = html.decodeHtmlEntities()
+        
+        val labelRegex = Regex("""(?si)<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학년도""")
+        val inputValRegex = { id: String -> Regex("""id="$id"[^>]*value="([^"]+)"""", RegexOption.IGNORE_CASE) }
+        
+        var parsedYear = ""
+        labelRegex.find(decodedHtml)?.groupValues?.get(1)?.let { id ->
+            parsedYear = inputValRegex(id).find(decodedHtml)?.groupValues?.get(1)?.decodeHtmlEntities() ?: ""
+        }
+        if (parsedYear.isBlank()) {
+            parsedYear = Regex("""value="(\d{4})학년도"""", RegexOption.IGNORE_CASE).find(decodedHtml)?.groupValues?.get(1) ?: ""
+        } else {
+            parsedYear = Regex("""\d{4}""").find(parsedYear)?.value ?: parsedYear
+        }
+        
+        val semesterLabelRegex = Regex("""(?si)<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학기""")
+        var parsedSemesterStr = ""
+        semesterLabelRegex.find(decodedHtml)?.groupValues?.get(1)?.let { id ->
+            parsedSemesterStr = inputValRegex(id).find(decodedHtml)?.groupValues?.get(1)?.decodeHtmlEntities() ?: ""
+        }
+        if (parsedSemesterStr.isBlank()) {
+            parsedSemesterStr = Regex("""value="([^"]*학기)"""", RegexOption.IGNORE_CASE).find(decodedHtml)?.groupValues?.get(1) ?: ""
+        }
+        
+        val finalYear = if (parsedYear.isNotBlank()) parsedYear else (defaultYear ?: "")
+        val finalSemester = (Semester.fromName(parsedSemesterStr) ?: defaultSemester) ?: Semester.FIRST
+
         val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
         val tdRegex = Regex("""(?si)<(td|th)\b[^>]*>(.*?)</\1>""")
         
@@ -1834,15 +1824,6 @@ object LmsApi {
             val tds = tdRegex.findAll(trContent).map { it.groupValues[2].stripHtmlTags() }.toList()
             
             // Detailed grade rows in Web Dynpro have 9 columns:
-            // 0: Selection/Accessibility helper
-            // 1: Grade (등급)
-            // 2: Detail GPA (상세성적)
-            // 3: Subject Name (과목명)
-            // 4: Classification (이수구분)
-            // 5: Credits (과목학점)
-            // 6: Professor (교수명)
-            // 7: Notes (비고)
-            // 8: Subject Code (과목코드)
             if (tds.size == 9) {
                 val subjectCode = tds[8].trim()
                 val subjectName = tds[3].trim()
@@ -1874,7 +1855,7 @@ object LmsApi {
             println(decodedHtml.take(3000))
         }
         
-        return GradeTable(items = cellsList)
+        return GradeTable(year = finalYear, semester = finalSemester, items = cellsList)
     }
 }
 

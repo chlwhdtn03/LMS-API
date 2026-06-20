@@ -15,6 +15,8 @@ data class GradeCell(
 
 @Serializable
 data class GradeTable(
+    val year: String,
+    val semester: Semester,
     val items: List<GradeCell>
 )
 
