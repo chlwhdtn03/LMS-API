@@ -73,6 +73,7 @@ object LmsApi {
     private var apiBearerToken = ""
     private var cachedSecureId = ""
     private var cachedContextId = ""
+    private var cachedAppName = ""
 
     private data class AssignmentMetadata(
         val groupName: String,
@@ -747,6 +748,7 @@ object LmsApi {
     internal suspend fun loginLMS(id: String, password: String): Boolean {
         cachedSecureId = ""
         cachedContextId = ""
+        cachedAppName = ""
         val loginResponse = client.submitForm(
             url = LMS_LOGIN_URL,
             formParameters = parameters {
@@ -1317,7 +1319,8 @@ object LmsApi {
         
         val secureId = cachedSecureId
         val contextId = cachedContextId
-        if (secureId.isNotBlank() && contextId.isNotBlank()) {
+        val cachedApp = cachedAppName
+        if (secureId.isNotBlank() && contextId.isNotBlank() && cachedApp == appName) {
             val formAction = "/sap/bc/webdynpro/SAP/$appName?sap-contextid=$contextId"
             try {
                 val html = postEventQueue(url, appName, secureId, formAction)
@@ -1332,8 +1335,9 @@ object LmsApi {
             }
             cachedSecureId = ""
             cachedContextId = ""
+            cachedAppName = ""
         } else {
-            println("[WebDynpro Cache] Miss (Cold) - No cached session found for app: $appName. Fetching fresh context...")
+            println("[WebDynpro Cache] Miss (Cold/AppMismatch) - No valid cached session found for app: $appName. Fetching fresh context...")
         }
 
         val response = client.get(url) {
@@ -1353,6 +1357,7 @@ object LmsApi {
         if (nextSecureId.isNotBlank() && nextContextId.isNotBlank()) {
             cachedSecureId = nextSecureId
             cachedContextId = nextContextId
+            cachedAppName = appName
             val finalFormAction = "/sap/bc/webdynpro/SAP/$appName?sap-contextid=$nextContextId"
             try {
                 val eventHtml = postEventQueue(url, appName, nextSecureId, finalFormAction)
@@ -1365,6 +1370,7 @@ object LmsApi {
                     
                     cachedSecureId = finalSecureId
                     cachedContextId = finalContextId
+                    cachedAppName = appName
                     return eventHtml
                 }
             } catch (e: Exception) {
@@ -1712,6 +1718,7 @@ object LmsApi {
 
         cachedSecureId = nextSecureId
         cachedContextId = nextContextId
+        cachedAppName = "ZCMB3W0017"
         return parseGradeTable(resultHtml, year, semester)
     }
 
