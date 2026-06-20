@@ -71,9 +71,7 @@ object LmsApi {
     var isLoggined = false
     private var lmsId = ""
     private var apiBearerToken = ""
-    private var cachedSecureId = ""
-    private var cachedContextId = ""
-    private var cachedAppName = ""
+    private val webDynproCache = mutableMapOf<String, Pair<String, String>>()
 
     private data class AssignmentMetadata(
         val groupName: String,
@@ -746,9 +744,7 @@ object LmsApi {
      * @return LMS로그인에 성공하면 true, 실패하면 false를 반환합니다.
      */
     internal suspend fun loginLMS(id: String, password: String): Boolean {
-        cachedSecureId = ""
-        cachedContextId = ""
-        cachedAppName = ""
+        webDynproCache.clear()
         val loginResponse = client.submitForm(
             url = LMS_LOGIN_URL,
             formParameters = parameters {
@@ -1317,11 +1313,9 @@ object LmsApi {
     internal suspend fun fetchWebDynproHtml(url: String, appName: String): String {
         checkLoggedIn()
         
-        val secureId = cachedSecureId
-        val contextId = cachedContextId
-        val cachedApp = cachedAppName
-        if (secureId.isNotBlank() && contextId.isNotBlank() && cachedApp == appName) {
-            val formAction = "/sap/bc/webdynpro/SAP/$appName?sap-contextid=$contextId"
+        val cached = webDynproCache[appName]
+        if (cached != null) {
+            val (secureId, formAction) = cached
             try {
                 val html = postEventQueue(url, appName, secureId, formAction)
                 if (isValidWebDynproResponse(html)) {
@@ -1333,11 +1327,9 @@ object LmsApi {
             } catch (e: Exception) {
                 println("[WebDynpro Cache] Miss (Error) - Request with cached session for app: $appName failed. Re-fetching fresh context...")
             }
-            cachedSecureId = ""
-            cachedContextId = ""
-            cachedAppName = ""
+            webDynproCache.remove(appName)
         } else {
-            println("[WebDynpro Cache] Miss (Cold/AppMismatch) - No valid cached session found for app: $appName. Fetching fresh context...")
+            println("[WebDynpro Cache] Miss (Cold) - No cached session found for app: $appName. Fetching fresh context...")
         }
 
         val response = client.get(url) {
@@ -1346,31 +1338,24 @@ object LmsApi {
                 append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
             }
         }
-        val html = response.bodyAsText().decodeHtmlEntities()
+        val html = response.bodyAsText().decodeHtmlEntities().decodeHtmlEntities()
         
-        val nextSecureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
+        val secureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
             .find(html)?.groupValues?.get(1) ?: ""
-        val nextFormAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
-            .find(html)?.groupValues?.get(1) ?: ""
-        val nextContextId = Regex("""sap-contextid=([^&"]+)""").find(nextFormAction)?.groupValues?.get(1) ?: ""
+        val formAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.get(1)?.decodeHtmlEntities()?.decodeHtmlEntities() ?: ""
             
-        if (nextSecureId.isNotBlank() && nextContextId.isNotBlank()) {
-            cachedSecureId = nextSecureId
-            cachedContextId = nextContextId
-            cachedAppName = appName
-            val finalFormAction = "/sap/bc/webdynpro/SAP/$appName?sap-contextid=$nextContextId"
+        if (secureId.isNotBlank() && formAction.isNotBlank()) {
+            webDynproCache[appName] = Pair(secureId, formAction)
             try {
-                val eventHtml = postEventQueue(url, appName, nextSecureId, finalFormAction)
+                val eventHtml = postEventQueue(url, appName, secureId, formAction)
                 if (isValidWebDynproResponse(eventHtml)) {
                     val finalSecureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
-                        .find(eventHtml)?.groupValues?.get(1) ?: nextSecureId
+                        .find(eventHtml)?.groupValues?.get(1) ?: secureId
                     val finalFormActionNew = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
-                        .find(eventHtml)?.groupValues?.get(1) ?: finalFormAction
-                    val finalContextId = Regex("""sap-contextid=([^&"]+)""").find(finalFormActionNew)?.groupValues?.get(1) ?: nextContextId
+                        .find(eventHtml)?.groupValues?.get(1)?.decodeHtmlEntities()?.decodeHtmlEntities() ?: formAction
                     
-                    cachedSecureId = finalSecureId
-                    cachedContextId = finalContextId
-                    cachedAppName = appName
+                    webDynproCache[appName] = Pair(finalSecureId, finalFormActionNew)
                     return eventHtml
                 }
             } catch (e: Exception) {
@@ -1653,12 +1638,9 @@ object LmsApi {
         checkLoggedIn()
         
         var currentHtml = fetchWebDynproHtml("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMB3W0017", "ZCMB3W0017")
-        val secureId = cachedSecureId
-        val contextId = cachedContextId
-        if (secureId.isBlank() || contextId.isBlank()) {
-            throw IllegalStateException("성적 페이지 세션을 초기화하지 못했습니다.")
-        }
-        val formAction = "/sap/bc/webdynpro/SAP/ZCMB3W0017?sap-contextid=$contextId"
+        val cached = webDynproCache["ZCMB3W0017"] ?: throw IllegalStateException("성적 페이지 세션을 초기화하지 못했습니다.")
+        val secureId = cached.first
+        val formAction = cached.second
 
         val peryrLabelMatch = Regex("""<label\b[^>]*\bfor="([^"]+)"[^>]*>(?:(?!</?label\b).)*?학년도""", RegexOption.IGNORE_CASE).find(currentHtml)
         val peryrMatch = Regex("""id="([^"]+:VIW_MAIN\.PERYR)"""").find(currentHtml)
@@ -1708,17 +1690,14 @@ object LmsApi {
                 append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
             }
         }
-        val resultHtml = response.bodyAsText().decodeHtmlEntities()
+        val resultHtml = response.bodyAsText().decodeHtmlEntities().decodeHtmlEntities()
         
         val nextSecureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
             .find(resultHtml)?.groupValues?.get(1) ?: secureId
         val nextFormAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
-            .find(resultHtml)?.groupValues?.get(1) ?: formAction
-        val nextContextId = Regex("""sap-contextid=([^&"]+)""").find(nextFormAction)?.groupValues?.get(1) ?: contextId
+            .find(resultHtml)?.groupValues?.get(1)?.decodeHtmlEntities()?.decodeHtmlEntities() ?: formAction
 
-        cachedSecureId = nextSecureId
-        cachedContextId = nextContextId
-        cachedAppName = "ZCMB3W0017"
+        webDynproCache["ZCMB3W0017"] = Pair(nextSecureId, nextFormAction)
         return parseGradeTable(resultHtml, year, semester)
     }
 
