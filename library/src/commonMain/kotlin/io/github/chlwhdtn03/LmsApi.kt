@@ -367,27 +367,27 @@ object LmsApi {
 
         val syncId = "todo_sync:${Random.nextLong()}:$now"
         val shouldSendSnapshot = shouldSendTodoSnapshot()
-        val events = buildList<PostHogBatchEvent> {
-            add(
-                PostHogBatchEvent(
-                    event = POSTHOG_IDENTIFY_EVENT,
-                    properties = buildJsonObject {
-                        put("distinct_id", distinctId)
-                        put("\$set", buildJsonObject {
-                            put("last_todo_sync_at", now)
-                        })
-                        put("\$set_once", buildJsonObject {
-                            put("initial_at", now)
-                            put("initial_todo_sync_at", now)
-                            put("initial_total_count", stats.totalCount)
-                            put("initial_unsubmitted_count", stats.unsubmittedCount)
-                            put("initial_unsubmitted_ratio", stats.ratio)
-                        })
-                    },
-                    timestamp = now,
+        if (shouldSendSnapshot) {
+            val events = buildList<PostHogBatchEvent> {
+                add(
+                    PostHogBatchEvent(
+                        event = POSTHOG_IDENTIFY_EVENT,
+                        properties = buildJsonObject {
+                            put("distinct_id", distinctId)
+                            put("\$set", buildJsonObject {
+                                put("last_todo_sync_at", now)
+                            })
+                            put("\$set_once", buildJsonObject {
+                                put("initial_at", now)
+                                put("initial_todo_sync_at", now)
+                                put("initial_total_count", stats.totalCount)
+                                put("initial_unsubmitted_count", stats.unsubmittedCount)
+                                put("initial_unsubmitted_ratio", stats.ratio)
+                            })
+                        },
+                        timestamp = now,
+                    )
                 )
-            )
-            if (shouldSendSnapshot) {
                 add(
                     PostHogBatchEvent(
                         event = POSTHOG_TODO_SNAPSHOT_EVENT,
@@ -432,18 +432,17 @@ object LmsApi {
                     )
                 )
             }
-        }
-
-        apiScope.launch {
-            runCatching {
-                client.post(POSTHOG_BATCH_URL) {
-                    contentType(ContentType.Application.Json)
-                    setBody(
-                        PostHogBatchRequest(
-                            apiKey = POSTHOG_PROJECT_API_KEY,
-                            batch = events,
+            apiScope.launch {
+                runCatching {
+                    client.post(POSTHOG_BATCH_URL) {
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            PostHogBatchRequest(
+                                apiKey = POSTHOG_PROJECT_API_KEY,
+                                batch = events,
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
@@ -747,10 +746,13 @@ object LmsApi {
     }
 
     /**
+     * LMS에 로그인합니다. 로그인에 성공하면 학번 정보와 토큰 정보가 캐싱되어 이후 요청들에 사용됩니다.
+     *
      * @param id LMS 아이디
      * @param password LMS 비밀번호
      * @return LMS로그인에 성공하면 true, 실패하면 false를 반환합니다.
      */
+    @Throws(Exception::class)
     internal suspend fun loginLMS(id: String, password: String): Boolean {
         webDynproCache.clear()
         cachedLatestGradeYear = null
@@ -850,30 +852,60 @@ object LmsApi {
         return isLoggined // 토큰값이 비어있거나 Null이면 로그인 실패
     }
 
+    /**
+     * 로그인된 사용자의 수강 학기 목록을 가져옵니다.
+     *
+     * @return 학기 목록
+     */
+    @Throws(Exception::class)
     @OptIn(ExperimentalTime::class)
     internal suspend fun getTerms(): List<Term> {
         checkLoggedIn()
         return fetchTerms()
     }
 
+    /**
+     * 로그인된 사용자의 개인 정보(이름, 학과 등)를 가져옵니다.
+     *
+     * @return 사용자 정보
+     */
+    @Throws(Exception::class)
     internal suspend fun getLoginInfo(): Info {
         checkLoggedIn()
 
         return fetchLoginInfo()
     }
 
+    /**
+     * 현재 로그인 세션의 LMS 쿠키 목록을 가져옵니다. 외부 세션 연동 시 사용됩니다.
+     *
+     * @return LMS 쿠키를 담은 세션 응답
+     */
+    @Throws(Exception::class)
     internal suspend fun getCookies(): LmsSessionResponse {
         checkLoggedIn()
 
         return fetchLmsSession()
     }
 
+    /**
+     * LMS 로그인을 비동기 방식으로 수행하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param id LMS 아이디
+     * @param password LMS 비밀번호
+     * @param completion 결과 수신 콜백
+     */
     fun loginLMS(id: String, password: String, completion: (LmsLoginResult) -> Unit) {
         launchLoginResult(completion) {
             loginLMS(id, password)
         }
     }
 
+    /**
+     * 로그인된 사용자의 학기 목록을 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param completion 결과 수신 콜백
+     */
     @OptIn(ExperimentalTime::class)
     fun getTerms(completion: (LmsTermsResult) -> Unit) {
         launchTermsResult(completion) {
@@ -881,18 +913,35 @@ object LmsApi {
         }
     }
 
+    /**
+     * 로그인된 사용자의 개인 정보 조회를 비동기 방식으로 수행하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param completion 결과 수신 콜백
+     */
     fun getLoginInfo(completion: (LmsLoginInfoResult) -> Unit) {
         launchLoginInfoResult(completion) {
             getLoginInfo()
         }
     }
 
+    /**
+     * 현재 로그인 세션의 LMS 쿠키 목록 조회를 비동기 방식으로 수행하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param completion 결과 수신 콜백
+     */
     fun getCookies(completion: (LmsCookiesResult) -> Unit) {
         launchCookiesResult(completion) {
             getCookies()
         }
     }
 
+    /**
+     * 특정 학기의 수강 과목 상세 정보(할 일, 출석, 공지, 과제 등 전체 정보)를 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param term 학기 정보
+     * @param loadingState 조회 진행률 콜백 (0.0f ~ 1.0f)
+     * @param completion 결과 수신 콜백
+     */
     @ExperimentalTime
     fun getSubjects(
         term: Term,
@@ -904,6 +953,13 @@ object LmsApi {
         }
     }
 
+    /**
+     * 제출해야 할 과제, 동영상 시청 정보 등 할 일 중심 정보를 비동기 방식으로 빠르게 조회하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param term 학기 정보
+     * @param loadingState 조회 진행률 콜백 (0.0f ~ 1.0f)
+     * @param completion 결과 수신 콜백
+     */
     @ExperimentalTime
     fun getTodoList(
         term: Term,
@@ -918,6 +974,14 @@ object LmsApi {
         )
     }
 
+    /**
+     * 제출해야 할 과제, 동영상 시청 정보 등 할 일 중심 정보를 분석 식별자 정보와 함께 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param term 학기 정보
+     * @param loadingState 조회 진행률 콜백 (0.0f ~ 1.0f)
+     * @param postHogDistinctId 분석용 식별자
+     * @param completion 결과 수신 콜백
+     */
     @ExperimentalTime
     fun getTodoList(
         term: Term,
@@ -936,17 +1000,27 @@ object LmsApi {
     }
 
     /**
-     * @param loadingState Float 변수에는 진행률을 각 단계마다 전달합니다. (0.0f~1.0f)
+     * 특정 학기의 수강 과목 상세 정보(할 일, 출석, 공지, 과제 등 전체 정보)를 가져옵니다.
+     *
+     * @param term 학기 정보
+     * @param loadingState 진행률 콜백 (0.0f ~ 1.0f)
+     * @return 수강 과목 목록
      */
+    @Throws(Exception::class)
     @ExperimentalTime
     internal suspend fun getSubjects(term: Term, loadingState: (Float) -> Unit = {}): List<Subject> {
         return loadSubjects(term, loadingState, SubjectLoadMode.Full)
     }
 
     /**
-     * 제출해야 할 과제, 동영상 시청 정보만 빠르게 가져옵니다. (SSU-Time 전용)
-     * @param loadingState Float 변수에는 진행률을 각 단계마다 전달합니다. (0.0f~1.0f)
+     * 제출해야 할 과제, 동영상 시청 정보 등 할 일 정보만 빠르게 가져옵니다. (SSU-Time 전용)
+     *
+     * @param term 학기 정보
+     * @param loadingState 진행률 콜백 (0.0f ~ 1.0f)
+     * @param postHogDistinctId 분석용 식별자
+     * @return 할 일 정보가 포함된 수강 과목 목록
      */
+    @Throws(Exception::class)
     @ExperimentalTime
     internal suspend fun getTodoList(
         term: Term,
@@ -961,6 +1035,14 @@ object LmsApi {
         )
     }
 
+    /**
+     * 미제출 과제/동영상 비율 통계를 계산하여 가져옵니다.
+     *
+     * @param term 학기 정보
+     * @param loadingState 진행률 콜백 (0.0f ~ 1.0f)
+     * @return 미제출 통계 정보
+     */
+    @Throws(Exception::class)
     @ExperimentalTime
     internal suspend fun getUnsubmittedRatioStats(
         term: Term,
@@ -1148,11 +1230,22 @@ object LmsApi {
         return parseTimetable(html)
     }
 
+    /**
+     * 유세인트 개인 시간표 정보를 조회하여 가져옵니다.
+     *
+     * @return 유세인트 개인 시간표 정보
+     */
+    @Throws(Exception::class)
     suspend fun getTimetable(): Timetable {
         checkLoggedIn()
         return getTimetable("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW2102")
     }
 
+    /**
+     * 유세인트 개인 시간표 정보를 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param completion 결과 수신 콜백
+     */
     fun getTimetable(completion: (LmsTimetableResult) -> Unit) {
         apiScope.launch {
             val result = try {
@@ -1442,11 +1535,22 @@ object LmsApi {
         return tableHtml
     }
 
+    /**
+     * 유세인트 졸업사정표 정보를 조회하여 가져옵니다.
+     *
+     * @return 유세인트 졸업사정표 정보
+     */
+    @Throws(Exception::class)
     suspend fun getGraduateTable(): GraduateTable {
         checkLoggedIn()
         return getGraduateTable("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW8015")
     }
 
+    /**
+     * 유세인트 졸업사정표 정보를 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param completion 결과 수신 콜백
+     */
     fun getGraduateTable(completion: (LmsGraduateTableResult) -> Unit) {
         apiScope.launch {
             val result = try {
@@ -1521,11 +1625,22 @@ object LmsApi {
         return parseTuitionTable(html)
     }
 
+    /**
+     * 유세인트 등록금 납부 이력 정보를 조회하여 가져옵니다.
+     *
+     * @return 유세인트 등록금 납부 내역 데이터
+     */
+    @Throws(Exception::class)
     suspend fun getTuitionTable(): TuitionTable {
         checkLoggedIn()
         return getTuitionTable("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW6520n")
     }
 
+    /**
+     * 유세인트 등록금 납부 이력 정보를 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param completion 결과 수신 콜백
+     */
     fun getTuitionTable(completion: (LmsTuitionResult) -> Unit) {
         apiScope.launch {
             val result = try {
@@ -1582,11 +1697,22 @@ object LmsApi {
         return parseScholarshipHistoryTable(html)
     }
 
+    /**
+     * 유세인트 장학 수혜 이력 정보를 조회하여 가져옵니다.
+     *
+     * @return 유세인트 장학 수혜 내역 데이터
+     */
+    @Throws(Exception::class)
     suspend fun getScholarshipHistoryTable(): ScholarshipHistoryTable {
         checkLoggedIn()
         return getScholarshipHistoryTable("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW7530n")
     }
 
+    /**
+     * 유세인트 장학 수혜 이력 정보를 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param completion 결과 수신 콜백
+     */
     fun getScholarshipHistoryTable(completion: (LmsScholarshipHistoryResult) -> Unit) {
         apiScope.launch {
             val result = try {
@@ -1650,6 +1776,15 @@ object LmsApi {
         return ScholarshipHistoryTable(items = cellsList)
     }
 
+    /**
+     * 유세인트 성적 조회 정보를 가져옵니다.
+     * 특정 학년도와 학기를 지정하여 조회하거나, null 지정 시 캐싱된 최신 성적을 가져옵니다.
+     *
+     * @param year 학년도 (예: "2026")
+     * @param semester 학기 정보
+     * @return 유세인트 성적 데이터 테이블
+     */
+    @Throws(Exception::class)
     suspend fun getGradeTable(year: String? = null, semester: Semester? = null): GradeTable {
         checkLoggedIn()
 
@@ -1742,6 +1877,13 @@ object LmsApi {
         return gradeTable
     }
 
+    /**
+     * 특정 학기의 유세인트 성적 조회 정보를 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param year 학년도 (예: "2026")
+     * @param semester 학기 정보
+     * @param completion 결과 수신 콜백
+     */
     fun getGradeTable(year: String?, semester: Semester?, completion: (LmsGradeResult) -> Unit) {
         apiScope.launch {
             val result = try {
@@ -1753,16 +1895,32 @@ object LmsApi {
         }
     }
 
+    /**
+     * 최신 학기의 유세인트 성적 조회 정보를 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param completion 결과 수신 콜백
+     */
     fun getGradeTable(completion: (LmsGradeResult) -> Unit) {
         getGradeTable(null, null, completion)
     }
 
+    /**
+     * 유세인트 학기별 성적 요약 정보를 조회하여 가져옵니다.
+     *
+     * @return 유세인트 학기별 성적 요약 테이블 데이터
+     */
+    @Throws(Exception::class)
     suspend fun getSemesterGradeSummaryTable(): SemesterGradeSummaryTable {
         checkLoggedIn()
         val initialHtml = fetchWebDynproHtml("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMB3W0017", "ZCMB3W0017")
         return parseSemesterGradeSummaryTable(initialHtml)
     }
 
+    /**
+     * 유세인트 학기별 성적 요약 정보를 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param completion 결과 수신 콜백
+     */
     fun getSemesterGradeSummaryTable(completion: (LmsSemesterGradeSummaryResult) -> Unit) {
         apiScope.launch {
             val result = try {
@@ -1871,6 +2029,16 @@ object LmsApi {
         return GradeTable(year = finalYear, semester = finalSemester, items = cellsList)
     }
 
+    /**
+     * 유세인트 채플 정보를 조회하여 가져옵니다.
+     * 특정 학년도와 학기를 지정하여 조회하거나, null 지정 시 캐싱된 최신 채플 내역을 가져옵니다.
+     * 계절학기 조회는 불가능합니다.
+     *
+     * @param year 학년도 (예: "2026")
+     * @param semester 학기 정보
+     * @return 유세인트 채플 정보 (좌석 현황, 출결 상태, 결석계 내역 포함)
+     */
+    @Throws(Exception::class)
     suspend fun getChapelTable(year: String? = null, semester: Semester? = null): ChapelInformation {
         checkLoggedIn()
 
@@ -1989,6 +2157,13 @@ object LmsApi {
         return chapelInfo
     }
 
+    /**
+     * 특정 학기의 유세인트 채플 정보를 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param year 학년도 (예: "2026")
+     * @param semester 학기 정보
+     * @param completion 결과 수신 콜백
+     */
     fun getChapelTable(year: String?, semester: Semester?, completion: (LmsChapelResult) -> Unit) {
         apiScope.launch {
             val result = try {
@@ -2000,6 +2175,11 @@ object LmsApi {
         }
     }
 
+    /**
+     * 최신 학기의 유세인트 채플 정보를 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param completion 결과 수신 콜백
+     */
     fun getChapelTable(completion: (LmsChapelResult) -> Unit) {
         getChapelTable(null, null, completion)
     }

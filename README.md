@@ -114,20 +114,57 @@ Xcode 프로젝트에 추가할 때는 다음 순서로 진행합니다.
 
 ## SSU-Time iOS Quick Start
 
-SSU-Time에서는 전체 과목 상세 정보가 아니라 시간표와 할 일 중심 데이터가 필요합니다. iOS에서는 아래 순서로 호출하면 됩니다.
+SSU-Time에서는 전체 과목 상세 정보 대신 시간표와 할 일 중심의 데이터를 주로 활용합니다. iOS/Swift 환경에서는 다음과 같이 간결하게 호출할 수 있습니다.
 
-```text
-loginLMS(id, password)
-getTerms()
-getTodoList(term)
-getCookies() // 외부 서비스에 현재 LMS 세션 쿠키를 전달해야 할 때만 사용
+### Swift Async/Await 지원 (권장)
+
+이 라이브러리는 Kotlin Multiplatform의 `suspend` 함수에 `@Throws` 데코레이터를 적용하여, Swift의 native **`async/await` 및 `throws`** 패턴을 직접 사용할 수 있습니다.
+
+```swift
+import LmsApi
+
+func loadSSUTimeTodos() {
+    Task {
+        do {
+            // 1. LMS 로그인
+            let loginSuccess = try await LmsApi.shared.loginLMS(id: "학번", password: "비밀번호")
+            guard loginSuccess else {
+                print("로그인 실패")
+                return
+            }
+            
+            // 2. 수강 학기 목록 조회 및 최신 학기 선택
+            let terms = try await LmsApi.shared.getTerms()
+            guard let latestTerm = terms.last else {
+                print("조회 가능한 학기가 없습니다.")
+                return
+            }
+            
+            // 3. 할 일 목록 조회 (getSubjects 대비 가볍고 빠른 조회)
+            let subjects = try await LmsApi.shared.getTodoList(term: latestTerm, loadingState: { progress in
+                print("진행률: \(Int(progress.floatValue * 100))%")
+            }, postHogDistinctId: nil)
+            
+            for subject in subjects {
+                print("과목: \(subject.name)")
+                for todo in subject.todoList {
+                    print("- \(todo.title) (마감일: \(todo.due_date))")
+                }
+            }
+        } catch {
+            print("오류 발생: \(error.localizedDescription)")
+        }
+    }
+}
 ```
 
-중요한 점은 **SSU-Time에서는 `getSubjects()`가 아니라 `getTodoList()`를 사용한다는 것**입니다. `getSubjects()`는 출석, 공지, 점수까지 가져와서 더 무겁습니다.
+> [!IMPORTANT]
+> - **`getTodoList()` 사용 권장**: SSU-Time에서는 출석, 공지, 평가점수 등을 한꺼번에 가져오는 무거운 `getSubjects()` 대신, 과제 및 동영상 시청 기한만 신속하게 파싱하는 `getTodoList()` 사용을 권장합니다.
+> - **메인 스레드 보장**: 비동기 콜백 및 진행률(`loadingState`) 업데이트는 메인 스레드 동작을 보장하지 않으므로, SwiftUI/UIKit UI 컴포넌트를 직접 변경할 때는 `DispatchQueue.main.async`나 `@MainActor` 내에서 수행해야 합니다.
 
-### Swift Result API
+### Swift Result API (비동기 콜백 방식)
 
-Swift에 노출되는 API는 `throws`를 사용하지 않습니다. 모든 함수는 completion으로 result class를 받고, 성공 여부는 `result.success`로 확인합니다.
+프로젝트 요건에 따라 콜백 방식을 선호하는 경우, 예외 던짐 없이 결과를 Result 래퍼 객체로 전달받는 콜백 API도 제공됩니다.
 
 ```swift
 import LmsApi
@@ -139,320 +176,53 @@ LmsApi.shared.loginLMS(id: "학번", password: "비밀번호") { loginResult in
     }
 
     LmsApi.shared.getTerms { termsResult in
-        guard termsResult.success, let term = termsResult.terms.last else {
+        guard termsResult.success, let latestTerm = termsResult.terms.last else {
             print(termsResult.errorMessage ?? "학기 조회 실패")
             return
         }
 
-        LmsApi.shared.getTodoList(
-            term: term,
-            loadingState: { progress in
-                print("loading: \(Int(progress.floatValue * 100))%")
-            },
-            completion: { subjectsResult in
-                guard subjectsResult.success else {
-                    print(subjectsResult.errorMessage ?? "todo 조회 실패")
-                    return
-                }
-
-                for subject in subjectsResult.subjects {
-                    print("과목: \(subject.name)")
-
-                    for todo in subject.todoList {
-                        print("- \(todo.title)")
-                        print("  type: \(todo.component_type)")
-                        print("  due: \(todo.due_date)")
-                    }
-                }
+        LmsApi.shared.getTodoList(term: latestTerm, loadingState: { progress in
+            print("loading: \(Int(progress.floatValue * 100))%")
+        }) { subjectsResult in
+            guard subjectsResult.success else {
+                print(subjectsResult.errorMessage ?? "조회 실패")
+                return
             }
-        )
+            // 수강 과목 및 할 일 처리
+            let subjects = subjectsResult.subjects
+        }
     }
 }
 ```
-
-completion과 `loadingState`는 메인 스레드 호출을 보장하지 않습니다. SwiftUI `@Published`나 UIKit UI를 갱신할 때는 `DispatchQueue.main.async`로 넘겨서 처리하세요.
 
 ### Swift에서 LMS 세션 쿠키 가져오기
 
-로그인 이후 현재 `LmsApi` 클라이언트가 들고 있는 LMS 세션 쿠키가 필요하면 `getCookies`를 호출합니다. 응답은 `lmsSession.cookies` 구조입니다.
+외부 서비스에 현재 로그인된 LMS 세션 쿠키를 동기화해야 할 경우 `getCookies`를 사용합니다.
 
 ```swift
-import LmsApi
-
-LmsApi.shared.loginLMS(id: "학번", password: "비밀번호") { loginResult in
-    guard loginResult.success else {
-        print(loginResult.errorMessage ?? "로그인 실패")
-        return
-    }
-
-    LmsApi.shared.getCookies { cookiesResult in
-        guard cookiesResult.success else {
-            print(cookiesResult.errorMessage ?? "쿠키 조회 실패")
-            return
-        }
-
-        let lmsSession = cookiesResult.lmsSession
-
-        for cookie in lmsSession.cookies {
-            print(cookie.name)
-            print(cookie.value)
-            print(cookie.domain)
-            print(cookie.path)
-        }
-    }
-}
-```
-
-외부 API가 아래 형태를 요구한다면 `cookiesResult.lmsSession.cookies`를 그대로 매핑하면 됩니다.
-
-```json
-{
-  "lmsSession": {
-    "cookies": [
-      {
-        "name": "string",
-        "value": "string",
-        "domain": "string",
-        "path": "string"
-      }
-    ]
-  }
-}
-```
-
-### throws 없는 async/await 래퍼
-
-```swift
-import Foundation
-import LmsApi
-
-enum SSUTimeLMSClient {
-    static func login(id: String, password: String) async -> LmsLoginResult {
-        await withCheckedContinuation { continuation in
-            LmsApi.shared.loginLMS(id: id, password: password) { result in
-                continuation.resume(returning: result)
-            }
-        }
-    }
-
-    static func getTerms() async -> LmsTermsResult {
-        await withCheckedContinuation { continuation in
-            LmsApi.shared.getTerms { result in
-                continuation.resume(returning: result)
-            }
-        }
-    }
-
-    static func getTodoList(
-        term: Term,
-        onProgress: @escaping (Float) -> Void = { _ in }
-    ) async -> LmsSubjectsResult {
-        await withCheckedContinuation { continuation in
-            LmsApi.shared.getTodoList(term: term, loadingState: { progress in
-                onProgress(progress.floatValue)
-            }) { result in
-                continuation.resume(returning: result)
-            }
-        }
-    }
-
-    static func getCookies() async -> LmsCookiesResult {
-        await withCheckedContinuation { continuation in
-            LmsApi.shared.getCookies { result in
-                continuation.resume(returning: result)
-            }
-        }
-    }
-
-    static func loadTodoSubjects(
-        id: String,
-        password: String,
-        selectTerm: ([Term]) -> Term? = { $0.last },
-        onProgress: @escaping (Float) -> Void = { _ in }
-    ) async -> LmsSubjectsResult {
-        let loginResult = await login(id: id, password: password)
-        guard loginResult.success else {
-            return LmsSubjectsResult(
-                success: false,
-                subjects: [],
-                errorMessage: loginResult.errorMessage
-            )
-        }
-
-        let termsResult = await getTerms()
-        guard termsResult.success else {
-            return LmsSubjectsResult(
-                success: false,
-                subjects: [],
-                errorMessage: termsResult.errorMessage
-            )
-        }
-
-        guard let term = selectTerm(termsResult.terms) else {
-            return LmsSubjectsResult(
-                success: false,
-                subjects: [],
-                errorMessage: "조회 가능한 학기가 없습니다."
-            )
-        }
-
-        return await getTodoList(term: term, onProgress: onProgress)
-    }
-}
-```
-
-### 가장 작은 Swift 사용 예제
-
-```swift
-func loadSSUTimeTodos() {
-    Task {
-        let result = await SSUTimeLMSClient.loadTodoSubjects(
-            id: "학번",
-            password: "비밀번호"
-        ) { progress in
-            print("loading: \(Int(progress * 100))%")
-        }
-
-        guard result.success else {
-            print(result.errorMessage ?? "SSU-Time LMS load failed")
-            return
-        }
-
-        for subject in result.subjects {
-            print("과목: \(subject.name)")
-
-            for todo in subject.todoList {
-                print("- \(todo.title)")
-                print("  type: \(todo.component_type)")
-                print("  due: \(todo.due_date)")
-            }
-        }
-    }
-}
-```
-
-### Swift에서 쓰기 편한 Todo 모델로 변환하기
-
-`getTodoList()`의 실제 데이터는 `LmsSubjectsResult.subjects`입니다. SSU-Time 화면에서는 과목별 `todoList`를 평평한 배열로 바꿔 쓰는 편이 편할 수 있습니다.
-
-```swift
-import Foundation
-import LmsApi
-
-struct SSUTimeTodoItem: Identifiable {
-    let id: String
-    let courseId: Int32
-    let courseName: String
-    let professor: String
-    let title: String
-    let componentType: String
-    let assignmentId: Int?
-    let dueDate: String
-}
-
-extension Subject {
-    func toSSUTimeTodoItems() -> [SSUTimeTodoItem] {
-        todoList.map { todo in
-            let assignmentId = todo.assignment_id.map { Int($0.intValue) }
-            let itemId = [
-                String(id),
-                todo.component_type,
-                String(assignmentId ?? -1),
-                todo.title,
-                todo.due_date
-            ].joined(separator: "-")
-
-            return SSUTimeTodoItem(
-                id: itemId,
-                courseId: id,
-                courseName: name,
-                professor: professor,
-                title: todo.title,
-                componentType: todo.component_type,
-                assignmentId: assignmentId,
-                dueDate: todo.due_date
-            )
-        }
-    }
-}
-
-extension Array where Element == Subject {
-    func toSSUTimeTodoItems() -> [SSUTimeTodoItem] {
-        flatMap { $0.toSSUTimeTodoItems() }
-    }
-}
-```
-
-### SwiftUI ViewModel 예제
-
-```swift
-import Foundation
-import LmsApi
-
-@MainActor
-final class SSUTimeTodoViewModel: ObservableObject {
-    @Published private(set) var subjects: [Subject] = []
-    @Published private(set) var todos: [SSUTimeTodoItem] = []
-    @Published private(set) var progress: Float = 0
-    @Published private(set) var isLoading = false
-    @Published var errorMessage: String?
-
-    func load(id: String, password: String) {
-        isLoading = true
-        progress = 0
-        errorMessage = nil
-
-        Task {
-            let result = await SSUTimeLMSClient.loadTodoSubjects(
-                id: id,
-                password: password
-            ) { [weak self] progress in
-                Task { @MainActor in
-                    self?.progress = progress
-                }
-            }
-
-            guard result.success else {
-                errorMessage = result.errorMessage ?? "LMS 정보를 불러오지 못했습니다."
-                isLoading = false
-                return
-            }
-
-            subjects = result.subjects
-            todos = result.subjects.toSSUTimeTodoItems()
-            isLoading = false
-        }
-    }
-}
+let cookiesResult = try await LmsApi.shared.getCookies()
+let cookies = cookiesResult.lmsSession.cookies // LmsSessionCookie 배열 리턴
 ```
 
 ## SSU-Time에서 받는 데이터
 
-`getTodoList(term:loadingState:completion:)`는 `LmsSubjectsResult`를 반환합니다. 실제 과목 목록은 `result.subjects`에 들어 있습니다.
-
-SSU-Time에서 주로 쓰는 필드는 다음과 같습니다.
+`getTodoList()`는 `LmsSubjectsResult`를 반환하며, 실제 과목 목록은 `result.subjects`에 들어 있습니다. SSU-Time에서 주로 활용하는 필드는 다음과 같습니다.
 
 ### `Subject`
-
-```swift
-subject.id              // 과목 ID
-subject.termId          // 학기 ID
-subject.termName        // 학기명
-subject.name            // 과목명
-subject.professor       // 교수명
-subject.totalStudents   // 수강 인원
-subject.todoList        // 할 일 목록
-subject.submissions     // 제출 정보
-```
+- `subject.id`: 과목 ID
+- `subject.termId`: 학기 ID
+- `subject.termName`: 학기명
+- `subject.name`: 과목명
+- `subject.professor`: 교수명
+- `subject.totalStudents`: 수강 인원
+- `subject.todoList`: 할 일 목록 (`TodoList` 타입)
+- `subject.submissions`: 제출 정보
 
 ### `TodoList`
-
-```swift
-todo.title              // 할 일 제목
-todo.component_type     // assignment, commons 등
-todo.assignment_id      // 과제 ID, 없을 수 있음
-todo.due_date           // 마감 시각 문자열
-```
+- `todo.title`: 할 일 제목
+- `todo.component_type`: 항목 타입 (예: `assignment`, `commons` 등)
+- `todo.assignment_id`: 과제 ID (없는 경우 null)
+- `todo.due_date`: 마감 시각 문자열
 
 `getTodoList(term)`는 빠른 조회를 위해 아래 필드는 빈 목록으로 반환합니다.
 
@@ -622,9 +392,59 @@ fun loadScholarships(
 
 창업지원단 공지와 장학 공지를 가져옵니다.
 
+### U-Saint(유세인트) 조회 API
+
+LMS API와 마찬가지로 로그인(`loginLMS`) 완료 이후 동일 세션을 공유하여 호출할 수 있습니다. Swift에서는 `@Throws(Exception::class)` 매핑을 통해 native `async/await` 와 `throws` 패턴으로 안전하게 예외 처리를 하며 직접 호출할 수 있습니다.
+
+#### 시간표 조회 (`LmsApi.getTimetable`)
+```kotlin
+@Throws(Exception::class)
+suspend fun getTimetable(): Timetable
+```
+학생 개인의 유세인트 시간표 정보(학년도, 학기 및 과목별 강의실, 시간, 교수명 등)를 조회합니다.
+
+#### 성적 및 요약 조회 (`LmsApi.getGradeTable` / `getSemesterGradeSummaryTable`)
+```kotlin
+@Throws(Exception::class)
+suspend fun getGradeTable(year: String? = null, semester: Semester? = null): GradeTable
+
+@Throws(Exception::class)
+suspend fun getSemesterGradeSummaryTable(): SemesterGradeSummaryTable
+```
+- `getGradeTable`: 특정 학년도와 학기의 상세 성적 정보를 조회합니다. 파라미터가 모두 `null`인 경우 캐싱된 최근 학기 데이터를 가져옵니다.
+- `getSemesterGradeSummaryTable`: 전체 학기별 신청학점, 취득학점, 평점평균, 학기석차 및 전체석차 등이 기재된 성적 요약 정보를 조회합니다.
+
+#### 채플 조회 (`LmsApi.getChapelTable`)
+```kotlin
+@Throws(Exception::class)
+suspend fun getChapelTable(year: String? = null, semester: Semester? = null): ChapelInformation
+```
+특정 학년도와 학기의 채플 정보를 조회합니다. 좌석 현황(`ChapelSeatStatusTable`), 주차별 출결 현황(`ChapelAttendanceTable`), 결석계 신청 내역(`ChapelAbsenceTable`)이 포함되어 있습니다. (계절학기는 조회를 지원하지 않습니다)
+
+#### 등록금 납부 내역 조회 (`LmsApi.getTuitionTable`)
+```kotlin
+@Throws(Exception::class)
+suspend fun getTuitionTable(): TuitionTable
+```
+학년도/학기별 등록금 고지액, 장학 감면액, 납부일자 및 납부 상태 등의 등록금 납부 이력 데이터를 조회합니다.
+
+#### 장학 수혜 내역 조회 (`LmsApi.getScholarshipHistoryTable`)
+```kotlin
+@Throws(Exception::class)
+suspend fun getScholarshipHistoryTable(): ScholarshipHistoryTable
+```
+학기별 장학 수혜 내역(수혜 장학금명, 수혜 구분, 실제 장학금액 등)의 수혜 이력을 조회합니다.
+
+#### 졸업사정표 조회 (`LmsApi.getGraduateTable`)
+```kotlin
+@Throws(Exception::class)
+suspend fun getGraduateTable(): GraduateTable
+```
+졸업사정표 상의 이수 구분별 기준 요건 학점, 취득 학점, 과부족 학점 및 최종 판정 결과를 조회합니다.
+
 ### Result 클래스
 
-모든 public API는 예외를 직접 던지지 않고 result class로 성공/실패를 전달합니다.
+모든 public API는 예외를 직접 던지지 않고 결과를 Result 래퍼 객체(비동기 콜백 방식)로 안전하게 전달하는 기능도 제공합니다.
 
 - `LmsLoginResult`: `success`, `errorMessage`
 - `LmsTermsResult`: `success`, `terms`, `errorMessage`
@@ -633,8 +453,15 @@ fun loadScholarships(
 - `LmsSubjectsResult`: `success`, `subjects`, `errorMessage`
 - `StartUpNoticesResult`: `success`, `notices`, `errorMessage`
 - `ScholarshipNoticesResult`: `success`, `notices`, `errorMessage`
+- `LmsTimetableResult`: `success`, `timetable`, `errorMessage`
+- `LmsGradeResult`: `success`, `gradeTable`, `errorMessage`
+- `LmsSemesterGradeSummaryResult`: `success`, `summaryTable`, `errorMessage`
+- `LmsChapelResult`: `success`, `chapelInformation`, `errorMessage`
+- `LmsTuitionResult`: `success`, `tuitionTable`, `errorMessage`
+- `LmsScholarshipHistoryResult`: `success`, `scholarshipHistoryTable`, `errorMessage`
+- `LmsGraduateTableResult`: `success`, `graduateTable`, `errorMessage`
 
-`success == false`이면 데이터 필드는 빈 목록 또는 `null`이고, 실패 이유는 `errorMessage`를 확인합니다.
+`success == false`이면 데이터 필드는 빈 목록 또는 `null`이고, 실패 이유는 `errorMessage`를 통해 확인할 수 있습니다.
 
 ## 주요 모델
 
@@ -694,7 +521,7 @@ fun loadScholarships(
 
 - `getTerms`, `getTodoList`, `getSubjects`, `getLoginInfo`, `getCookies`는 반드시 `loginLMS` 이후에 호출해야 합니다.
 - iOS에서는 Kotlin `object LmsApi`가 Swift의 `LmsApi.shared`로 보입니다.
-- iOS/Android public API는 callback result 방식입니다. Swift에 `throws` 기반 API를 노출하지 않기 위해 내부 suspend 함수는 public으로 노출하지 않습니다.
+- iOS/Android의 LMS 핵심 API는 비동기 콜백 방식(Callback Result)을 지원하며, 동시에 Kotlin `suspend` 함수들을 public으로 직접 호출할 수 있도록 `@Throws` 어노테이션이 적용되어 Swift의 native `async/await` 및 `throws` 패턴으로도 안전하게 호출할 수 있습니다.
 - completion과 `loadingState`는 메인 스레드 호출을 보장하지 않습니다.
 - 이 라이브러리는 Swift로 작성된 라이브러리가 아니라 Kotlin/Native가 만든 XCFramework입니다.
 - 숭실대학교 LMS 로그인 페이지나 LearningX API 구조가 바뀌면 동작이 깨질 수 있습니다.

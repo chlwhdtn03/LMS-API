@@ -40,6 +40,12 @@ internal suspend fun loadScholarships(pageNum: Int = 1): List<ScholarshipNotice>
     }.body<List<ScholarshipNotice>>()
 }
 
+/**
+ * 숭실대학교 창업지원단 공지사항 목록을 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+ *
+ * @param pageNum 조회할 페이지 번호 (기본값: 1)
+ * @param completion 결과 수신 콜백
+ */
 fun loadStartUpNotices(pageNum: Int = 1, completion: (StartUpNoticesResult) -> Unit) {
     noticeScope.launch {
         val result = try {
@@ -51,6 +57,12 @@ fun loadStartUpNotices(pageNum: Int = 1, completion: (StartUpNoticesResult) -> U
     }
 }
 
+/**
+ * 숭실대학교 장학 공지사항 목록을 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+ *
+ * @param pageNum 조회할 페이지 번호 (기본값: 1)
+ * @param completion 결과 수신 콜백
+ */
 fun loadScholarships(pageNum: Int = 1, completion: (ScholarshipNoticesResult) -> Unit) {
     noticeScope.launch {
         val result = try {
