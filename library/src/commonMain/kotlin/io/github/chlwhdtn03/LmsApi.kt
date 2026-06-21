@@ -72,6 +72,8 @@ object LmsApi {
     private var lmsId = ""
     private var apiBearerToken = ""
     private val webDynproCache = mutableMapOf<String, Pair<String, String>>()
+    private var cachedLatestGradeYear: String? = null
+    private var cachedLatestGradeSemester: Semester? = null
 
     private data class AssignmentMetadata(
         val groupName: String,
@@ -745,6 +747,8 @@ object LmsApi {
      */
     internal suspend fun loginLMS(id: String, password: String): Boolean {
         webDynproCache.clear()
+        cachedLatestGradeYear = null
+        cachedLatestGradeSemester = null
         val loginResponse = client.submitForm(
             url = LMS_LOGIN_URL,
             formParameters = parameters {
@@ -1636,6 +1640,14 @@ object LmsApi {
 
     suspend fun getGradeTable(year: String? = null, semester: Semester? = null): GradeTable {
         checkLoggedIn()
+
+        if (year == null && semester == null) {
+            val cachedYear = cachedLatestGradeYear
+            val cachedSem = cachedLatestGradeSemester
+            if (cachedYear != null && cachedSem != null) {
+                return getGradeTable(cachedYear, cachedSem)
+            }
+        }
         
         var currentHtml = fetchWebDynproHtml("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMB3W0017", "ZCMB3W0017")
         val cached = webDynproCache["ZCMB3W0017"] ?: throw IllegalStateException("성적 페이지 세션을 초기화하지 못했습니다.")
@@ -1698,7 +1710,14 @@ object LmsApi {
             .find(resultHtml)?.groupValues?.get(1)?.decodeHtmlEntities()?.decodeHtmlEntities() ?: formAction
 
         webDynproCache["ZCMB3W0017"] = Pair(nextSecureId, nextFormAction)
-        return parseGradeTable(resultHtml, year, semester)
+        val gradeTable = parseGradeTable(resultHtml, year, semester)
+
+        if (year == null && semester == null) {
+            cachedLatestGradeYear = gradeTable.year
+            cachedLatestGradeSemester = gradeTable.semester
+        }
+
+        return gradeTable
     }
 
     fun getGradeTable(year: String?, semester: Semester?, completion: (LmsGradeResult) -> Unit) {
