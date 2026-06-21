@@ -74,6 +74,12 @@ object LmsApi {
     private val webDynproCache = mutableMapOf<String, Pair<String, String>>()
     private var cachedLatestGradeYear: String? = null
     private var cachedLatestGradeSemester: Semester? = null
+    private var cachedLatestChapelYear: String? = null
+    private var cachedLatestChapelSemester: Semester? = null
+    private var cachedChapelPeryrId: String? = null
+    private var cachedChapelPeridId: String? = null
+    private var cachedChapelBtnSearchId: String? = null
+    private var cachedChapelInformation: ChapelInformation? = null
 
     private data class AssignmentMetadata(
         val groupName: String,
@@ -749,6 +755,12 @@ object LmsApi {
         webDynproCache.clear()
         cachedLatestGradeYear = null
         cachedLatestGradeSemester = null
+        cachedLatestChapelYear = null
+        cachedLatestChapelSemester = null
+        cachedChapelPeryrId = null
+        cachedChapelPeridId = null
+        cachedChapelBtnSearchId = null
+        cachedChapelInformation = null
         val loginResponse = client.submitForm(
             url = LMS_LOGIN_URL,
             formParameters = parameters {
@@ -1650,6 +1662,16 @@ object LmsApi {
         }
         
         var currentHtml = fetchWebDynproHtml("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMB3W0017", "ZCMB3W0017")
+        
+        if (cachedLatestGradeYear == null || cachedLatestGradeSemester == null) {
+            val defaultYear = parseYearFromHtml(currentHtml)
+            val defaultSem = parseSemesterFromHtml(currentHtml)
+            if (defaultYear.isNotBlank() && defaultSem != null) {
+                cachedLatestGradeYear = defaultYear
+                cachedLatestGradeSemester = defaultSem
+            }
+        }
+
         val cached = webDynproCache["ZCMB3W0017"] ?: throw IllegalStateException("성적 페이지 세션을 초기화하지 못했습니다.")
         val secureId = cached.first
         val formAction = cached.second
@@ -1798,30 +1820,11 @@ object LmsApi {
     fun parseGradeTable(html: String, defaultYear: String? = null, defaultSemester: Semester? = null): GradeTable {
         val decodedHtml = html.decodeHtmlEntities()
         
-        val labelRegex = Regex("""(?si)<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학년도""")
-        val inputValRegex = { id: String -> Regex("""id="$id"[^>]*value="([^"]+)"""", RegexOption.IGNORE_CASE) }
-        
-        var parsedYear = ""
-        labelRegex.find(decodedHtml)?.groupValues?.get(1)?.let { id ->
-            parsedYear = inputValRegex(id).find(decodedHtml)?.groupValues?.get(1)?.decodeHtmlEntities() ?: ""
-        }
-        if (parsedYear.isBlank()) {
-            parsedYear = Regex("""value="(\d{4})학년도"""", RegexOption.IGNORE_CASE).find(decodedHtml)?.groupValues?.get(1) ?: ""
-        } else {
-            parsedYear = Regex("""\d{4}""").find(parsedYear)?.value ?: parsedYear
-        }
-        
-        val semesterLabelRegex = Regex("""(?si)<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학기""")
-        var parsedSemesterStr = ""
-        semesterLabelRegex.find(decodedHtml)?.groupValues?.get(1)?.let { id ->
-            parsedSemesterStr = inputValRegex(id).find(decodedHtml)?.groupValues?.get(1)?.decodeHtmlEntities() ?: ""
-        }
-        if (parsedSemesterStr.isBlank()) {
-            parsedSemesterStr = Regex("""value="([^"]*학기)"""", RegexOption.IGNORE_CASE).find(decodedHtml)?.groupValues?.get(1) ?: ""
-        }
+        val parsedYear = parseYearFromHtml(html)
+        val parsedSemester = parseSemesterFromHtml(html)
         
         val finalYear = if (parsedYear.isNotBlank()) parsedYear else (defaultYear ?: "")
-        val finalSemester = (Semester.fromName(parsedSemesterStr) ?: defaultSemester) ?: Semester.FIRST
+        val finalSemester = (parsedSemester ?: defaultSemester) ?: Semester.FIRST
 
         val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
         val tdRegex = Regex("""(?si)<(td|th)\b[^>]*>(.*?)</\1>""")
@@ -1867,7 +1870,357 @@ object LmsApi {
         
         return GradeTable(year = finalYear, semester = finalSemester, items = cellsList)
     }
+
+    suspend fun getChapelTable(year: String? = null, semester: Semester? = null): ChapelInformation {
+        checkLoggedIn()
+
+        if (year == null && semester == null) {
+            val cachedYear = cachedLatestChapelYear
+            val cachedSem = cachedLatestChapelSemester
+            if (cachedYear != null && cachedSem != null) {
+                return getChapelTable(cachedYear, cachedSem)
+            }
+        }
+
+        if (year != null && semester != null) {
+            val cachedInfo = cachedChapelInformation
+            if (cachedInfo != null && year == cachedInfo.year && semester == cachedInfo.semester) {
+                println("[WebDynpro Cache] Hit - Returning cached ChapelInformation for $year-$semester")
+                return cachedInfo
+            }
+        }
+
+        var currentHtml = fetchWebDynproHtml("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW3681", "ZCMW3681")
+        
+        if (cachedLatestChapelYear == null || cachedLatestChapelSemester == null) {
+            val defaultYear = parseYearFromHtml(currentHtml)
+            val defaultSem = parseSemesterFromHtml(currentHtml)
+            if (defaultYear.isNotBlank() && defaultSem != null) {
+                cachedLatestChapelYear = defaultYear
+                cachedLatestChapelSemester = defaultSem
+                println("[WebDynpro Cache] Captured default latest chapel semester: $defaultYear-${defaultSem.name}")
+            }
+        }
+
+        val cached = webDynproCache["ZCMW3681"] ?: throw IllegalStateException("채플 페이지 세션을 초기화하지 못했습니다.")
+        val secureId = cached.first
+        val formAction = cached.second
+
+        val peryrLabelMatch = Regex("""<label\b[^>]*\bfor="([^"]+)"[^>]*>(?:(?!</?label\b).)*?학년도""", RegexOption.IGNORE_CASE).find(currentHtml)
+        val peryrMatch = Regex("""id="([^"]+:VIW_MAIN\.PERYR)"""").find(currentHtml)
+        val peryrId = peryrLabelMatch?.groupValues?.get(1)
+            ?: peryrMatch?.groupValues?.get(1)
+            ?: ""
+
+        val peridLabelMatch = Regex("""<label\b[^>]*\bfor="([^"]+)"[^>]*>(?:(?!</label>).)*?학기""", RegexOption.IGNORE_CASE).find(currentHtml)
+        val peridMatch = Regex("""id="([^"]+:VIW_MAIN\.PERID)"""").find(currentHtml)
+        val peridId = peridLabelMatch?.groupValues?.get(1)
+            ?: peridMatch?.groupValues?.get(1)
+            ?: ""
+
+        val btnSearchLabelMatch = Regex("""<(?:div|button)\b[^>]*\bid="([^"]+)"[^>]*ct="B"[^>]*>(?:(?!<(?:div|button)\b).)*?조회""", RegexOption.IGNORE_CASE).find(currentHtml)
+        val btnSearchMatch = Regex("""id="([^"]+\.BTN_SEARCH)"""").find(currentHtml)
+        val btnSearchId = btnSearchLabelMatch?.groupValues?.get(1)
+            ?: btnSearchMatch?.groupValues?.get(1)
+            ?: ""
+
+        // Cache the IDs if they were found in this html response
+        if (peryrId.isNotBlank()) cachedChapelPeryrId = peryrId
+        if (peridId.isNotBlank()) cachedChapelPeridId = peridId
+        if (btnSearchId.isNotBlank()) cachedChapelBtnSearchId = btnSearchId
+
+        // Resolve active IDs using cached fallback
+        val finalPeryrId = peryrId.ifBlank { cachedChapelPeryrId ?: "" }
+        val finalPeridId = peridId.ifBlank { cachedChapelPeridId ?: "" }
+        val finalBtnSearchId = btnSearchId.ifBlank { cachedChapelBtnSearchId ?: "WDB2" }
+
+        val buttonEvent = "Button_Press~E002Id~E004${finalBtnSearchId}~E003~E002ClientAction~E004submit~E003~E002~E003"
+        val focusInfo = escapeStr("{\"sFocussedId\":\"${finalBtnSearchId}\"}")
+        val buttonFormReq = "Form_Request~E002Id~E004sap.client.SsrClient.form~E005Async~E004false~E005FocusInfo~E004${focusInfo}~E005Hash~E004~E005DomChanged~E004false~E005IsDirty~E004false~E003~E002ResponseData~E004delta~E003~E002~E003"
+
+        if (semester != null && (semester == Semester.SUMMER || semester == Semester.WINTER)) {
+            throw IllegalArgumentException("채플은 계절학기 조회를 지원하지 않습니다.")
+        }
+
+        val eventQueue = if (year != null && semester != null && finalPeryrId.isNotBlank() && finalPeridId.isNotBlank()) {
+            val yearEvent = "ComboBox_Select~E002Id~E004${finalPeryrId}~E005Key~E004${year}~E005ByEnter~E004false~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
+            val semesterEvent = "ComboBox_Select~E002Id~E004${finalPeridId}~E005Key~E004${semester.code}~E005ByEnter~E004false~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
+            listOf(yearEvent, semesterEvent, buttonEvent, buttonFormReq).joinToString("~E001")
+        } else {
+            listOf(buttonEvent, buttonFormReq).joinToString("~E001")
+        }
+
+        val actionFullUrl = if (formAction.startsWith("http")) formAction else "https://ecc.ssu.ac.kr:8443$formAction"
+        val response = client.submitForm(
+            url = actionFullUrl,
+            formParameters = parameters {
+                append("sap-charset", "utf-8")
+                append("sap-wd-secure-id", secureId)
+                append("fesrAppName", "ZCMW3681")
+                append("fesrUseBeacon", "true")
+                append("SAPEVENTQUEUE", eventQueue)
+            }
+        ) {
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                append(HttpHeaders.Accept, "*/*")
+                append("X-Requested-With", "XMLHttpRequest")
+                append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
+            }
+        }
+        val resultHtml = response.bodyAsText().decodeHtmlEntities().decodeHtmlEntities()
+        
+        val nextSecureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(resultHtml)?.groupValues?.get(1) ?: secureId
+        val nextFormAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(resultHtml)?.groupValues?.get(1)?.decodeHtmlEntities()?.decodeHtmlEntities() ?: formAction
+
+        webDynproCache["ZCMW3681"] = Pair(nextSecureId, nextFormAction)
+        
+        val chapelInfo = parseChapelInformation(resultHtml, year, semester)
+
+        if (year == null && semester == null) {
+            cachedLatestChapelYear = chapelInfo.year
+            cachedLatestChapelSemester = chapelInfo.semester
+        }
+
+        cachedChapelInformation = chapelInfo
+
+        return chapelInfo
+    }
+
+    fun getChapelTable(year: String?, semester: Semester?, completion: (LmsChapelResult) -> Unit) {
+        apiScope.launch {
+            val result = try {
+                LmsChapelResult(success = true, chapelInformation = getChapelTable(year, semester))
+            } catch (throwable: Throwable) {
+                LmsChapelResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    fun getChapelTable(completion: (LmsChapelResult) -> Unit) {
+        getChapelTable(null, null, completion)
+    }
+
+    fun parseChapelInformation(html: String, defaultYear: String? = null, defaultSemester: Semester? = null): ChapelInformation {
+        val decodedHtml = html.decodeHtmlEntities()
+        
+        val parsedYear = parseYearFromHtml(html)
+        val parsedSemester = parseSemesterFromHtml(html)
+        
+        val finalYear = if (parsedYear.isNotBlank()) parsedYear else (defaultYear ?: "")
+        val finalSemester = (parsedSemester ?: defaultSemester) ?: Semester.FIRST
+
+        val tables = extractAllTables(decodedHtml)
+        
+        var seatStatusTable = ChapelSeatStatusTable(emptyList())
+        var attendanceTable = ChapelAttendanceTable(emptyList())
+        var absenceTable = ChapelAbsenceTable(emptyList())
+        
+        val seatStatusHeaders = listOf("분반", "시간표", "강의실", "층수", "좌석번호", "결석일수", "설문조사", "성적", "비고")
+        val attendanceHeaders = listOf("분반", "수업일자", "강의구분", "강사", "소속", "제목", "출결상태", "평가", "비고")
+        val absenceHeaders = listOf("학년도", "학기", "결석구분상세", "결석시작일자", "결석종료일자", "결석사유(국문)", "결석사유(영문)", "신청일자", "승인일자", "거부사유", "상태")
+
+        for (tableHtml in tables) {
+            val cleanedHtml = removeInnerTables(tableHtml)
+            val rawTable = parseRawTable(cleanedHtml) ?: continue
+            
+            val colsCount = rawTable.headers.size
+            if (rawTable.rows.isEmpty()) continue
+            
+            val firstRow = rawTable.rows[0]
+            
+            if (colsCount == 9 && firstRow.size >= 2 && firstRow[0].length >= 8 && firstRow[0].all { it.isDigit() } && !firstRow[1].contains(".")) {
+                val items = rawTable.rows.map { row ->
+                    val map = mutableMapOf<String, String>()
+                    for (i in seatStatusHeaders.indices) {
+                        if (i < row.size) {
+                            map[seatStatusHeaders[i]] = row[i]
+                        }
+                    }
+                    ChapelSeatStatusCell(
+                        classGroup = map["분반"] ?: "",
+                        timetable = map["시간표"] ?: "",
+                        classroom = map["강의실"] ?: "",
+                        seatNo = map["좌석번호"] ?: "",
+                        absenceCount = map["결석일수"] ?: "",
+                        gradeResult = map["성적"] ?: "",
+                        rawValues = map
+                    )
+                }
+                seatStatusTable = ChapelSeatStatusTable(items)
+            } else if (colsCount == 9 && firstRow.size >= 2 && firstRow[1].matches(Regex("""\d{4}\.\d{2}\.\d{2}"""))) {
+                val items = rawTable.rows.map { row ->
+                    val map = mutableMapOf<String, String>()
+                    for (i in attendanceHeaders.indices) {
+                        if (i < row.size) {
+                            map[attendanceHeaders[i]] = row[i]
+                        }
+                    }
+                    ChapelAttendanceCell(
+                        classGroup = map["분반"] ?: "",
+                        date = map["수업일자"] ?: "",
+                        lectureType = map["강의구분"] ?: "",
+                        status = map["출결상태"] ?: "",
+                        rawValues = map
+                    )
+                }
+                attendanceTable = ChapelAttendanceTable(items)
+            } else if (colsCount == 11 && firstRow.size >= 1 && firstRow[0].matches(Regex("""\d{4}"""))) {
+                val items = rawTable.rows.map { row ->
+                    val map = mutableMapOf<String, String>()
+                    for (i in absenceHeaders.indices) {
+                        if (i < row.size) {
+                            map[absenceHeaders[i]] = row[i]
+                        }
+                    }
+                    ChapelAbsenceCell(
+                        year = map["학년도"] ?: "",
+                        semester = map["학기"] ?: "",
+                        detail = map["결석구분상세"] ?: "",
+                        rawValues = map
+                    )
+                }
+                absenceTable = ChapelAbsenceTable(items)
+            }
+        }
+        
+        return ChapelInformation(
+            year = finalYear,
+            semester = finalSemester,
+            seatStatusTable = seatStatusTable,
+            attendanceTable = attendanceTable,
+            absenceTable = absenceTable
+        )
+    }
+
+    private fun extractAllTables(html: String): List<String> {
+        val tables = mutableListOf<String>()
+        var pos = 0
+        while (true) {
+            val startIdx = html.indexOf("<table", pos, ignoreCase = true)
+            if (startIdx == -1) break
+            
+            var depth = 1
+            var currentPos = startIdx + 6
+            var endIdx = -1
+            while (depth > 0 && currentPos < html.length) {
+                val nextStart = html.indexOf("<table", currentPos, ignoreCase = true)
+                val nextEnd = html.indexOf("</table>", currentPos, ignoreCase = true)
+                
+                if (nextEnd == -1) break
+                
+                if (nextStart != -1 && nextStart < nextEnd) {
+                    depth++
+                    currentPos = nextStart + 6
+                } else {
+                    depth--
+                    currentPos = nextEnd + 8
+                    if (depth == 0) {
+                        endIdx = nextEnd + 8
+                    }
+                }
+            }
+            if (endIdx != -1) {
+                tables.add(html.substring(startIdx, endIdx))
+            }
+            pos = startIdx + 6
+        }
+        return tables
+    }
+
+    private fun removeInnerTables(tableHtml: String): String {
+        var html = tableHtml
+        while (true) {
+            val startIdx = html.indexOf("<table", 1, ignoreCase = true)
+            if (startIdx == -1) break
+            
+            var depth = 1
+            var currentPos = startIdx + 6
+            var endIdx = -1
+            while (depth > 0 && currentPos < html.length) {
+                val nextStart = html.indexOf("<table", currentPos, ignoreCase = true)
+                val nextEnd = html.indexOf("</table>", currentPos, ignoreCase = true)
+                if (nextEnd == -1) break
+                
+                if (nextStart != -1 && nextStart < nextEnd) {
+                    depth++
+                    currentPos = nextStart + 6
+                } else {
+                    depth--
+                    currentPos = nextEnd + 8
+                    if (depth == 0) {
+                        endIdx = nextEnd + 8
+                    }
+                }
+            }
+            if (endIdx != -1) {
+                html = html.substring(0, startIdx) + html.substring(endIdx)
+            } else {
+                break
+            }
+        }
+        return html
+    }
+
+    private fun parseRawTable(tableHtml: String): RawTable? {
+        val decodedHtml = tableHtml.decodeHtmlEntities()
+        val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
+        val tdRegex = Regex("""(?si)<(td|th)\b[^>]*>(.*?)</\1>""")
+        
+        val allRows = mutableListOf<List<String>>()
+        for (trMatch in trRegex.findAll(decodedHtml)) {
+            val trContent = trMatch.groupValues[1]
+            val cells = tdRegex.findAll(trContent).map { it.groupValues[2].stripHtmlTags().trim() }.toList()
+            if (cells.isNotEmpty()) {
+                allRows.add(cells)
+            }
+        }
+        if (allRows.isEmpty()) return null
+        
+        val headers = allRows[0]
+        val rows = allRows.drop(1)
+        
+        return RawTable(headers = headers, rows = rows)
+    }
+
+    private fun parseYearFromHtml(html: String): String {
+        val decodedHtml = html.decodeHtmlEntities()
+        val labelRegex = Regex("""(?si)<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학년도""")
+        val inputValRegex = { id: String -> Regex("""id="$id"[^>]*value="([^"]+)"""", RegexOption.IGNORE_CASE) }
+        
+        var parsedYear = ""
+        labelRegex.find(decodedHtml)?.groupValues?.get(1)?.let { id ->
+            parsedYear = inputValRegex(id).find(decodedHtml)?.groupValues?.get(1)?.decodeHtmlEntities() ?: ""
+        }
+        if (parsedYear.isBlank()) {
+            parsedYear = Regex("""value="(\d{4})학년도"""", RegexOption.IGNORE_CASE).find(decodedHtml)?.groupValues?.get(1) ?: ""
+        } else {
+            parsedYear = Regex("""\d{4}""").find(parsedYear)?.value ?: parsedYear
+        }
+        return parsedYear
+    }
+
+    private fun parseSemesterFromHtml(html: String): Semester? {
+        val decodedHtml = html.decodeHtmlEntities()
+        val semesterLabelRegex = Regex("""(?si)<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학기""")
+        val inputValRegex = { id: String -> Regex("""id="$id"[^>]*value="([^"]+)"""", RegexOption.IGNORE_CASE) }
+        
+        var parsedSemesterStr = ""
+        semesterLabelRegex.find(decodedHtml)?.groupValues?.get(1)?.let { id ->
+            parsedSemesterStr = inputValRegex(id).find(decodedHtml)?.groupValues?.get(1)?.decodeHtmlEntities() ?: ""
+        }
+        if (parsedSemesterStr.isBlank()) {
+            parsedSemesterStr = Regex("""value="([^"]*학기)"""", RegexOption.IGNORE_CASE).find(decodedHtml)?.groupValues?.get(1) ?: ""
+        }
+        return Semester.fromName(parsedSemesterStr)
+    }
+
+    private data class RawTable(val headers: List<String>, val rows: List<List<String>>)
 }
+
 
 fun normalizePem(raw: String): String {
     return raw

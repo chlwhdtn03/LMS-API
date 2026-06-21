@@ -83,4 +83,11 @@ data class LmsSemesterGradeSummaryResult(
     val errorMessage: String? = null,
 )
 
+data class LmsChapelResult(
+    val success: Boolean,
+    val chapelInformation: ChapelInformation? = null,
+    val errorMessage: String? = null,
+)
+
+
 
