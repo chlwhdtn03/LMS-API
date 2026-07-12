@@ -1,44 +1,533 @@
-# LMS-API
+# LMS-API (SSU LMS & U-Saint Kotlin Multiplatform API)
 
-숭실대학교 LMS(Canvas, LearningX)에서 학기, 강의, 할 일, 출석, 공지, 제출, 점수 정보를 가져오기 위한 Kotlin Multiplatform 라이브러리입니다.
+숭실대학교 LMS(Canvas, LearningX) 및 유세인트(U-Saint)의 학기, 강의, 할 일, 출석, 공지, 시간표, 성적, 채플, 등록금, 장학금, 졸업사정표 등의 정보를 조회하기 위한 Kotlin Multiplatform 라이브러리입니다.
 
-> SSU-Time에서 iOS로 연동하려면 여기부터 보면 됩니다: [SSU-Time iOS Quick Start](#ssu-time-ios-quick-start)
+이 README는 **Swift Package Manager(SPM)**를 이용한 iOS 연동과 **Gradle**을 이용한 Android/Kotlin 연동을 기준으로 작성되었습니다.
 
-이 README의 iOS 문서는 **Swift Package Manager(SPM)로 연결하거나 `LmsApi.xcframework` 파일을 Xcode 프로젝트에 직접 추가해서 사용하는 방식**을 기준으로 작성되어 있습니다. SPM도 내부적으로는 GitHub Release에 올라간 `LmsApi.xcframework.zip`을 받는 구조입니다.
+---
 
 ## 지원 플랫폼
 
-- Android
-- JVM
+- Android (JVM)
 - iOS device: `iosArm64`
 - iOS simulator: `iosX64`, `iosSimulatorArm64`
 - macOS Apple Silicon: `macosArm64`
 
-## iOS에서 SPM으로 연결하기
+---
 
-iOS 앱 프로젝트에서는 Xcode의 Swift Package Manager로 이 라이브러리를 추가할 수 있습니다.
+## 라이브러리 추가하기 (Installation)
+
+### 1. iOS에서 Swift Package Manager(SPM)로 추가하기
+
+iOS 앱 프로젝트에서는 Xcode의 Swift Package Manager를 통해 의존성을 추가할 수 있습니다.
 
 1. Xcode에서 앱 프로젝트를 엽니다.
 2. 상단 메뉴에서 `File > Add Package Dependencies...`를 선택합니다.
 3. 검색창에 이 저장소 URL을 입력합니다.
-
-```text
-https://github.com/chlwhdtn03/LMS-API
-```
-
+   ```text
+   https://github.com/chlwhdtn03/LMS-API
+   ```
 4. Dependency Rule에서 사용할 버전을 선택합니다.
-5. Package Product 목록에서 `LmsApi`를 선택합니다.
-6. 앱 target에 `LmsApi`가 추가되는지 확인합니다.
+5. Package Product 목록에서 `LmsApi`를 선택하고 앱 target에 추가합니다.
 
-Swift 파일에서는 다음처럼 import 합니다.
-
+Swift 파일에서는 다음과 같이 import 합니다.
 ```swift
 import LmsApi
 ```
 
-### SPM 배포 조건
+> [!NOTE]
+> SPM은 내부적으로 GitHub Release에 업로드된 `LmsApi.xcframework.zip`을 내려받아 사용하도록 구성되어 있습니다.
 
-이 저장소의 루트에는 SPM이 읽는 `Package.swift`가 있어야 합니다. 현재 구조는 Kotlin/Native로 만든 XCFramework를 SPM binary target으로 감싸는 방식입니다.
+### 2. Android / Kotlin에서 Gradle로 추가하기
+
+Android 또는 Kotlin Multiplatform(KMP) 프로젝트에서는 Gradle 의존성으로 추가하여 사용할 수 있습니다.
+
+**Android 단일 프로젝트 (`build.gradle.kts`):**
+```kotlin
+dependencies {
+    implementation("io.github.chlwhdtn03:lms:1.2.4")
+}
+```
+
+**Kotlin Multiplatform 프로젝트 (`commonMain` 의존성):**
+```kotlin
+kotlin {
+    sourceSets {
+        commonMain.dependencies {
+            implementation("io.github.chlwhdtn03:lms:1.2.4")
+        }
+    }
+}
+```
+
+---
+
+## 기본 흐름 및 로그인 (Authentication)
+
+LMS 조회 기능과 유세인트(U-Saint) 조회 기능은 모두 **LMS 로그인 완료 후** 생성된 세션을 공유하여 호출할 수 있습니다. 로그인에 성공하면 학번 정보와 토큰 정보가 내부적으로 캐싱되어 이후 호출되는 API에 자동으로 적용됩니다.
+
+### iOS (Swift) 로그인 예시
+```swift
+import LmsApi
+
+func performLogin() {
+    Task {
+        do {
+            // LMS 로그인을 진행합니다. (성공 시 유세인트 세션도 함께 유지됩니다.)
+            let loginSuccess = try await LmsApi.shared.loginLMS(id: "학번", password: "비밀번호")
+            if loginSuccess {
+                print("로그인 성공")
+            } else {
+                print("로그인 실패")
+            }
+        } catch {
+            print("로그인 중 에러 발생: \(error.localizedDescription)")
+        }
+    }
+}
+```
+
+### Android (Kotlin) 로그인 예시
+```kotlin
+import io.github.chlwhdtn03.LmsApi
+
+fun performLogin() {
+    // Android/Kotlin에서는 콜백(Callback Result) API 혹은 Coroutine suspend 함수를 호출할 수 있습니다.
+    LmsApi.loginLMS(id = "학번", password = "비밀번호") { result ->
+        if (result.success) {
+            println("로그인 성공")
+        } else {
+            println("로그인 실패: ${result.errorMessage}")
+        }
+    }
+}
+```
+
+---
+
+## 1. 유세인트(U-Saint) 조회 기능 사용법
+
+유세인트 조회 기능은 시간표, 성적, 채플, 등록금, 장학금, 졸업사정표 데이터를 비동기식으로 파싱하여 반환합니다. Swift에서는 native `async/await` 와 `throws` 패턴으로 예외 처리를 하며 직접 호출할 수 있고, Android/Kotlin에서도 suspend 함수 혹은 콜백 API를 이용해 손쉽게 호출 가능합니다.
+
+### iOS (Swift - Async/Await) 사용 예시
+```swift
+import LmsApi
+
+func loadUSaintInformation() {
+    Task {
+        do {
+            // 1. 시간표 조회
+            let timetable = try await LmsApi.shared.getTimetable()
+            print("시간표 학기: \(timetable.year) \(timetable.semester)")
+            for item in timetable.items {
+                print("- [\(item.subject)] \(item.classroom) / \(item.professor)")
+            }
+            
+            // 2. 성적 상세 조회 (year, semester에 nil을 전달하면 캐싱된 최근 학기 성적을 조회합니다.)
+            let gradeTable = try await LmsApi.shared.getGradeTable(year: nil, semester: nil)
+            for grade in gradeTable.items {
+                print("- \(grade.subjectName): \(grade.grade) (\(grade.credits)학점)")
+            }
+            
+            // 3. 성적 요약 조회 (학기별 신청학점, 평점평균, 석차 등)
+            let gradeSummary = try await LmsApi.shared.getSemesterGradeSummaryTable()
+            for summary in gradeSummary.items {
+                print("- \(summary.year)년 \(summary.semester?.name ?? "")학기 평점: \(summary.gpa)")
+            }
+            
+            // 4. 채플 출결 및 좌석 조회 (year, semester에 nil을 전달하면 캐싱된 최근 채플 내역을 조회합니다.)
+            let chapel = try await LmsApi.shared.getChapelTable(year: nil, semester: nil)
+            print("배정 좌석 번호: \(chapel.seatStatusTable.items.first?.seatNo ?? "없음")")
+            
+            // 5. 등록금 납부 내역 조회
+            let tuition = try await LmsApi.shared.getTuitionTable()
+            for record in tuition.items {
+                print("- \(record.year) \(record.semester) 납부 금액: \(record.paymentAmount)")
+            }
+            
+            // 6. 장학 수혜 내역 조회
+            let scholarship = try await LmsApi.shared.getScholarshipHistoryTable()
+            for item in scholarship.items {
+                print("- \(item.year)학년도 \(item.semester)학기 [\(item.scholarshipName)] 수혜 금액: \(item.actualAmount)")
+            }
+            
+            // 7. 졸업사정표 조회
+            let graduate = try await LmsApi.shared.getGraduateTable()
+            for row in graduate.items {
+                print("- \(row.classification) (졸업요건: \(row.standardValue)학점 / 취득: \(row.calculatedValue)학점)")
+            }
+            
+        } catch {
+            print("유세인트 정보 조회 실패: \(error.localizedDescription)")
+        }
+    }
+}
+```
+
+### Android (Kotlin) 사용 예시
+```kotlin
+import io.github.chlwhdtn03.LmsApi
+import io.github.chlwhdtn03.data.Lms.Semester
+
+fun loadUSaintForAndroid() {
+    // 1. 시간표 조회
+    LmsApi.getTimetable { result ->
+        if (result.success && result.timetable != null) {
+            println("시간표 학기: ${result.timetable.year} ${result.timetable.semester}")
+        }
+    }
+    
+    // 2. 성적 상세 조회
+    LmsApi.getGradeTable(year = "2026", semester = Semester.FIRST) { result ->
+        if (result.success && result.gradeTable != null) {
+            result.gradeTable.items.forEach { cell ->
+                println("${cell.subjectName}: ${cell.grade}")
+            }
+        }
+    }
+    
+    // 3. 성적 요약 조회
+    LmsApi.getSemesterGradeSummaryTable { result ->
+        if (result.success && result.summaryTable != null) {
+            result.summaryTable.items.forEach { summary ->
+                println("${summary.year}학년도 평점평균: ${summary.gpa}")
+            }
+        }
+    }
+    
+    // 4. 채플 조회
+    LmsApi.getChapelTable(year = null, semester = null) { result ->
+        if (result.success && result.chapelInformation != null) {
+            println("결석 횟수: ${result.chapelInformation.seatStatusTable.items.firstOrNull()?.absenceCount}")
+        }
+    }
+    
+    // 5. 등록금 납부 내역 조회
+    LmsApi.getTuitionTable { result ->
+        if (result.success && result.tuitionTable != null) {
+            println("마지막 납부액: ${result.tuitionTable.items.firstOrNull()?.paymentAmount}")
+        }
+    }
+    
+    // 6. 장학 수혜 내역 조회
+    LmsApi.getScholarshipHistoryTable { result ->
+        if (result.success && result.scholarshipHistoryTable != null) {
+            println("수혜 장학금명: ${result.scholarshipHistoryTable.items.firstOrNull()?.scholarshipName}")
+        }
+    }
+    
+    // 7. 졸업사정표 조회
+    LmsApi.getGraduateTable { result ->
+        if (result.success && result.graduateTable != null) {
+            println("이수결과: ${result.graduateTable.items.firstOrNull()?.result}")
+        }
+    }
+}
+```
+
+---
+
+## 2. LMS 조회 기능 사용법
+
+LMS 조회 기능은 학기 목록, 강의 목록, 할 일(과제 및 동영상 시청 기한), 출석, 공지, 제출 및 점수 정보를 조회할 수 있는 기능을 제공합니다.
+
+### iOS (Swift - Async/Await) 사용 예시
+```swift
+import LmsApi
+
+func loadLMSTodos() {
+    Task {
+        do {
+            // 1. 수강 학기 목록 조회 및 최신 학기 선택
+            let terms = try await LmsApi.shared.getTerms()
+            guard let latestTerm = terms.last else {
+                print("조회 가능한 학기가 없습니다.")
+                return
+            }
+            
+            // 2. 할 일 목록 조회 (getSubjects 대비 빠르고 가볍게 기한 정보만 파싱)
+            let subjects = try await LmsApi.shared.getTodoList(term: latestTerm, loadingState: { progress in
+                print("진행률: \(Int(progress.floatValue * 100))%")
+            }, postHogDistinctId: nil)
+            
+            for subject in subjects {
+                print("과목: \(subject.name)")
+                for todo in subject.todoList {
+                    print("- \(todo.title) (마감일: \(todo.due_date))")
+                }
+            }
+        } catch {
+            print("LMS 조회 에러: \(error.localizedDescription)")
+        }
+    }
+}
+```
+
+### Android (Kotlin) 사용 예시
+```kotlin
+import io.github.chlwhdtn03.LmsApi
+
+fun loadLMSForAndroid() {
+    LmsApi.getTerms { termsResult ->
+        if (termsResult.success) {
+            val latestTerm = termsResult.terms.lastOrNull() ?: return@getTerms
+            
+            LmsApi.getTodoList(
+                term = latestTerm,
+                loadingState = { progress ->
+                    println("loading: ${(progress * 100).toInt()}%")
+                },
+                completion = { subjectsResult ->
+                    if (subjectsResult.success) {
+                        subjectsResult.subjects.forEach { subject ->
+                            subject.todoList.forEach { todo ->
+                                println("[${subject.name}] ${todo.title} / ${todo.due_date}")
+                            }
+                        }
+                    }
+                }
+            )
+        }
+    }
+}
+```
+
+---
+
+## 공개 API 레퍼런스
+
+### 1. LMS 관련 API
+
+#### `LmsApi.loginLMS`
+```kotlin
+fun loginLMS(id: String, password: String, completion: (LmsLoginResult) -> Unit)
+```
+LMS 아이디와 비밀번호로 로그인합니다. 성공 시 내부 세션이 생성되며 유세인트 세션도 자동으로 공유됩니다.
+
+#### `LmsApi.getTerms`
+```kotlin
+fun getTerms(completion: (LmsTermsResult) -> Unit)
+```
+로그인된 사용자의 학기 목록을 가져옵니다.
+
+#### `LmsApi.getTodoList`
+```kotlin
+fun getTodoList(term: Term, loadingState: (Float) -> Unit = {}, completion: (LmsSubjectsResult) -> Unit)
+```
+과목 기본 정보와 할 일 목록(과제, 동영상 등), 제출 정보를 빠르게 파싱하여 가져옵니다.
+
+#### `LmsApi.getSubjects`
+```kotlin
+fun getSubjects(term: Term, loadingState: (Float) -> Unit = {}, completion: (LmsSubjectsResult) -> Unit)
+```
+과목 기본 정보, 할 일, 출석, 공지, 제출 및 점수 데이터를 모두 가져옵니다. 여러 API를 내부적으로 호출하므로 `getTodoList`에 비해 무겁습니다.
+
+#### `LmsApi.getLoginInfo`
+```kotlin
+fun getLoginInfo(completion: (LmsLoginInfoResult) -> Unit)
+```
+로그인한 학생의 이름, 학과, 로그인 ID, 이메일 등의 기본 신원 정보를 가져옵니다.
+
+#### `LmsApi.getCookies`
+```kotlin
+fun getCookies(completion: (LmsCookiesResult) -> Unit)
+```
+현재 로그인된 세션의 쿠키 목록을 반환합니다. 외부 서비스와의 연동 시 사용합니다.
+
+#### Notice API
+```kotlin
+// 창업지원단 공지사항 조회
+fun loadStartUpNotices(pageNum: Int = 1, completion: (StartUpNoticesResult) -> Unit)
+
+// 장학 공지사항 조회
+fun loadScholarships(pageNum: Int = 1, completion: (ScholarshipNoticesResult) -> Unit)
+```
+
+---
+
+### 2. U-Saint 관련 API
+
+#### `LmsApi.getTimetable`
+```kotlin
+suspend fun getTimetable(): Timetable
+fun getTimetable(completion: (LmsTimetableResult) -> Unit)
+```
+개인의 유세인트 시간표를 조회합니다.
+
+#### `LmsApi.getGradeTable`
+```kotlin
+suspend fun getGradeTable(year: String? = null, semester: Semester? = null): GradeTable
+fun getGradeTable(year: String?, semester: Semester?, completion: (LmsGradeResult) -> Unit)
+```
+지정된 학년도 및 학기의 성적 상세 내역을 조회합니다. 파라미터가 모두 `null`일 경우 캐싱된 최신 학기 성적을 반환합니다.
+
+#### `LmsApi.getSemesterGradeSummaryTable`
+```kotlin
+suspend fun getSemesterGradeSummaryTable(): SemesterGradeSummaryTable
+fun getSemesterGradeSummaryTable(completion: (LmsSemesterGradeSummaryResult) -> Unit)
+```
+전체 학기별 신청학점, 취득학점, 평점평균 및 석차 정보가 담긴 성적 요약 데이터를 조회합니다.
+
+#### `LmsApi.getChapelTable`
+```kotlin
+suspend fun getChapelTable(year: String? = null, semester: Semester? = null): ChapelInformation
+fun getChapelTable(year: String?, semester: Semester?, completion: (LmsChapelResult) -> Unit)
+```
+지정된 학년도 및 학기의 채플 정보(좌석 번호, 주차별 출결, 결석계 신청 현황)를 조회합니다. (계절학기 조회 불가)
+
+#### `LmsApi.getTuitionTable`
+```kotlin
+suspend fun getTuitionTable(): TuitionTable
+fun getTuitionTable(completion: (LmsTuitionResult) -> Unit)
+```
+학년도/학기별 등록금 고지액, 장학 감면액, 실납부일자 및 납부 금액 등 등록금 납부 이력을 조회합니다.
+
+#### `LmsApi.getScholarshipHistoryTable`
+```kotlin
+suspend fun getScholarshipHistoryTable(): ScholarshipHistoryTable
+fun getScholarshipHistoryTable(completion: (LmsScholarshipHistoryResult) -> Unit)
+```
+학기별 수혜한 장학금 명칭, 지급 방법, 선발 금액 및 실수혜금액 등의 내역을 조회합니다.
+
+#### `LmsApi.getGraduateTable`
+```kotlin
+suspend fun getGraduateTable(): GraduateTable
+fun getGraduateTable(completion: (LmsGraduateTableResult) -> Unit)
+```
+졸업사정표 상의 이수구분별 졸업 기준 요건 학점, 본인 취득학점, 차이값 및 판정 결과를 조회합니다.
+
+---
+
+## 주요 데이터 모델 (Models)
+
+### `Semester` (학기 구분 Enum)
+- `FIRST`: 1학기 (코드: "10")
+- `SUMMER`: 여름학기 (코드: "11")
+- `SECOND`: 2학기 (코드: "20")
+- `WINTER`: 겨울학기 (코드: "21")
+
+### `Timetable` & `TimetableCell` (시간표)
+- `year`: 학년도 (예: "2026학년도")
+- `semester`: 학기 (예: "1학기")
+- `items`: `TimetableCell` 리스트
+  - `dayOfWeek`: 요일 (`DayOfWeek` Enum)
+  - `period`: 교시 (예: "1 교시")
+  - `periodTime`: 교시 시간 범위 (예: "(08:00-08:50)")
+  - `subject`: 과목명
+  - `professor`: 교수명
+  - `time`: 강의 시간 문자열
+  - `classroom`: 강의실
+
+### `GradeTable` & `GradeCell` (성적 상세)
+- `year`: 학년도
+- `semester`: 학기
+- `items`: `GradeCell` 리스트
+  - `subjectCode`: 과목코드
+  - `subjectName`: 과목명
+  - `classification`: 이수구분 (예: "전공기초")
+  - `credits`: 학점 (예: "3.0")
+  - `grade`: 등급 (예: "A+")
+  - `gradePoint`: 평점 (예: "4.5")
+  - `professor`: 교수명
+
+### `SemesterGradeSummaryTable` & `SemesterGradeSummaryCell` (성적 요약)
+- `items`: `SemesterGradeSummaryCell` 리스트
+  - `year`: 학년도
+  - `semester`: 학기
+  - `attemptedCredits`: 신청학점
+  - `earnedCredits`: 취득학점
+  - `pfCredits`: P/F학점
+  - `gpa`: 평점평균
+  - `gpaSum`: 평점계
+  - `arithmeticMean`: 산술평균
+  - `semesterRank`: 학기석차
+  - `totalRank`: 전체석차
+  - `academicWarning`: 학사경고여부
+  - `consultationStatus`: 상담여부
+  - `failedYearStatus`: 유급여부
+
+### `ChapelInformation` (채플 정보)
+- `year`: 학년도
+- `semester`: 학기
+- `seatStatusTable`: 좌석 정보 테이블 (`classGroup`, `timetable`, `classroom`, `seatNo`, `absenceCount`, `gradeResult`)
+- `attendanceTable`: 출결 현황 테이블 (`classGroup`, `date`, `lectureType`, `status`)
+- `absenceTable`: 결석계 신청 이력 테이블 (`year`, `semester`, `detail`)
+
+### `TuitionTable` & `TuitionCell` (등록금)
+- `items`: `TuitionCell` 리스트
+  - `year`, `semester`: 학년도 및 학기
+  - `grade`: 학년(기)
+  - `registrationType`: 등록구분 (예: "정규등록")
+  - `registrationDate`: 납부일자
+  - `amount`: 고지금액
+  - `reduction`: 장학 감면액
+  - `paymentAmount`: 최종 실납부금액
+
+### `ScholarshipHistoryTable` & `ScholarshipHistoryCell` (장학)
+- `items`: `ScholarshipHistoryCell` 리스트
+  - `year`, `semester`: 장학금 지급 학년도 및 학기
+  - `scholarshipName`: 장학금명
+  - `paymentMethod`: 지급방법 (예: "고지서 감면")
+  - `processStatus`: 처리 상태
+  - `selectedAmount`: 선발금액
+  - `actualAmount`: 실수혜금액
+  - `redeemedAmount`: 환수금액
+  - `replacedAmount`: 교체금액
+  - `replacedScholarshipName`: 교체장학금명
+  - `workDepartment`: 근로부서
+
+### `GraduateTable` & `GraduateTableCell` (졸업사정표)
+- `items`: `GraduateTableCell` 리스트
+  - `classification`: 이수구분 (예: "전공선택")
+  - `requirement`: 졸업요건
+  - `standardValue`: 기준학점
+  - `calculatedValue`: 취득학점
+  - `difference`: 차이값
+  - `result`: 이수 여부 판정 (예: "합격", "미필")
+
+### `Term` (LMS 학기 정보)
+- `id`: 학기 고유 ID
+- `name`: 학기명
+- `start_at`: 시작 시각
+- `end_at`: 종료 시각
+
+### `Subject` (LMS 수강 과목)
+- `id`: 과목 고유 ID
+- `termId`: 학기 ID
+- `termName`: 학기명
+- `name`: 과목명
+- `professor`: 담당 교수
+- `totalStudents`: 수강 인원
+- `todoList`: 과제 및 할 일 목록
+- `attendances`: 출석 기록 리스트
+- `discussions`: 공지사항 목록
+- `submissions`: 과제 제출 정보
+- `scoredAssignments`: 평가 및 획득한 점수 리스트
+
+### `TodoList` (LMS 할 일)
+- `component_type`: 항목 타입 (예: `assignment`, `commons`)
+- `assignment_id`: 과제 고유 ID
+- `title`: 제목
+- `due_date`: 마감 기한
+
+### `Submission` (LMS 제출 정보)
+- `assignment_id`: 과제 고유 ID
+- `attachments`: 첨부파일 목록
+- `attempt`: 제출 시도 횟수
+- `cached_due_date`: 마감 시각
+- `late`: 지각 여부
+- `preview_url`: 제출 파일 미리보기 URL
+- `submitted_at`: 제출 시각
+- `submission_type`: 제출 유형
+- `workflow_state`: 제출 상태 (예: `submitted`, `graded`, `unsubmitted`)
+- `score`: 획득 점수
+
+---
+
+## SPM 배포 및 XCFramework 수동 추가 (라이브러리 제공자용)
+
+### SPM 배포 조건
+이 저장소의 루트에 있는 `Package.swift`는 Kotlin/Native 컴파일 결과물인 XCFramework를 바이너리 타겟으로 래핑하여 배포하도록 설정되어 있습니다.
 
 ```swift
 // swift-tools-version:5.9
@@ -62,467 +551,38 @@ let package = Package(
 )
 ```
 
-SPM 배포가 정상 동작하려면 아래 값들이 서로 맞아야 합니다.
+**체크리스트:**
+- GitHub Release 태그와 `Package.swift`의 URL 버젼 태그(`1.2.4`)가 매칭되어야 합니다.
+- `checksum`은 빌드 완료된 `LmsApi.xcframework.zip` 파일 기준으로 계산된 체크섬이어야 합니다.
+- 체크섬은 아래 명령어로 추출할 수 있습니다:
+  ```bash
+  swift package compute-checksum LmsApi.xcframework.zip
+  ```
 
-- GitHub Release 태그: `1.2.4`
-- Release asset 파일명: `LmsApi.xcframework.zip`
-- `Package.swift`의 URL: `https://github.com/chlwhdtn03/LMS-API/releases/download/1.2.4/LmsApi.xcframework.zip`
-- `Package.swift`의 checksum: 실제 `LmsApi.xcframework.zip`으로 계산한 값
-
-checksum은 zip 파일을 만든 뒤 아래 명령으로 계산합니다.
-
-```bash
-swift package compute-checksum LmsApi.xcframework.zip
-```
-
-### SPM 배포 순서
-
-라이브러리 제공자는 릴리스할 때 아래 순서로 진행합니다.
-
+### 배포 파이프라인 진행 순서
 1. `./gradlew :library:assembleLmsApiReleaseXCFramework` 실행
-2. 산출된 `LmsApi.xcframework`를 `LmsApi.xcframework.zip`으로 압축
-3. `swift package compute-checksum LmsApi.xcframework.zip` 실행
-4. `Package.swift`의 checksum 갱신
-5. `Package.swift`를 커밋
-6. Git tag 생성
-7. GitHub Release 생성
-8. Release asset으로 `LmsApi.xcframework.zip` 업로드
-
-한 번 배포한 `LmsApi.xcframework.zip`은 같은 태그에서 교체하지 않는 것을 권장합니다. 파일 내용이 바뀌면 checksum도 바뀌어서 기존 SPM 설치가 실패할 수 있습니다.
-
-## iOS에서 XCFramework 직접 추가하기
-
-라이브러리 제공자는 아래 Gradle task로 iOS용 XCFramework를 만들 수 있습니다.
-
-```bash
-./gradlew :library:assembleLmsApiReleaseXCFramework
-```
-
-빌드 결과는 아래 경로에 생성됩니다.
-
-```text
-library/build/XCFrameworks/release/LmsApi.xcframework
-```
-
-Xcode 프로젝트에 추가할 때는 다음 순서로 진행합니다.
-
-1. `LmsApi.xcframework`를 Xcode 프로젝트 Navigator로 드래그합니다.
-2. 필요한 앱 target이 선택되어 있는지 확인합니다.
-3. `Copy items if needed`를 체크합니다.
-4. 앱 target의 `General > Frameworks, Libraries, and Embedded Content`에 `LmsApi.xcframework`가 들어갔는지 확인합니다.
-5. 현재 프레임워크는 static framework로 빌드되므로 Embed 설정은 보통 `Do Not Embed`를 사용합니다.
-
-## SSU-Time iOS Quick Start
-
-SSU-Time에서는 전체 과목 상세 정보 대신 시간표와 할 일 중심의 데이터를 주로 활용합니다. iOS/Swift 환경에서는 다음과 같이 간결하게 호출할 수 있습니다.
-
-### Swift Async/Await 지원 (권장)
-
-이 라이브러리는 Kotlin Multiplatform의 `suspend` 함수에 `@Throws` 데코레이터를 적용하여, Swift의 native **`async/await` 및 `throws`** 패턴을 직접 사용할 수 있습니다.
-
-```swift
-import LmsApi
-
-func loadSSUTimeTodos() {
-    Task {
-        do {
-            // 1. LMS 로그인
-            let loginSuccess = try await LmsApi.shared.loginLMS(id: "학번", password: "비밀번호")
-            guard loginSuccess else {
-                print("로그인 실패")
-                return
-            }
-            
-            // 2. 수강 학기 목록 조회 및 최신 학기 선택
-            let terms = try await LmsApi.shared.getTerms()
-            guard let latestTerm = terms.last else {
-                print("조회 가능한 학기가 없습니다.")
-                return
-            }
-            
-            // 3. 할 일 목록 조회 (getSubjects 대비 가볍고 빠른 조회)
-            let subjects = try await LmsApi.shared.getTodoList(term: latestTerm, loadingState: { progress in
-                print("진행률: \(Int(progress.floatValue * 100))%")
-            }, postHogDistinctId: nil)
-            
-            for subject in subjects {
-                print("과목: \(subject.name)")
-                for todo in subject.todoList {
-                    print("- \(todo.title) (마감일: \(todo.due_date))")
-                }
-            }
-        } catch {
-            print("오류 발생: \(error.localizedDescription)")
-        }
-    }
-}
-```
-
-> [!IMPORTANT]
-> - **`getTodoList()` 사용 권장**: SSU-Time에서는 출석, 공지, 평가점수 등을 한꺼번에 가져오는 무거운 `getSubjects()` 대신, 과제 및 동영상 시청 기한만 신속하게 파싱하는 `getTodoList()` 사용을 권장합니다.
-> - **메인 스레드 보장**: 비동기 콜백 및 진행률(`loadingState`) 업데이트는 메인 스레드 동작을 보장하지 않으므로, SwiftUI/UIKit UI 컴포넌트를 직접 변경할 때는 `DispatchQueue.main.async`나 `@MainActor` 내에서 수행해야 합니다.
-
-### Swift Result API (비동기 콜백 방식)
-
-프로젝트 요건에 따라 콜백 방식을 선호하는 경우, 예외 던짐 없이 결과를 Result 래퍼 객체로 전달받는 콜백 API도 제공됩니다.
-
-```swift
-import LmsApi
-
-LmsApi.shared.loginLMS(id: "학번", password: "비밀번호") { loginResult in
-    guard loginResult.success else {
-        print(loginResult.errorMessage ?? "로그인 실패")
-        return
-    }
-
-    LmsApi.shared.getTerms { termsResult in
-        guard termsResult.success, let latestTerm = termsResult.terms.last else {
-            print(termsResult.errorMessage ?? "학기 조회 실패")
-            return
-        }
-
-        LmsApi.shared.getTodoList(term: latestTerm, loadingState: { progress in
-            print("loading: \(Int(progress.floatValue * 100))%")
-        }) { subjectsResult in
-            guard subjectsResult.success else {
-                print(subjectsResult.errorMessage ?? "조회 실패")
-                return
-            }
-            // 수강 과목 및 할 일 처리
-            let subjects = subjectsResult.subjects
-        }
-    }
-}
-```
-
-### Swift에서 LMS 세션 쿠키 가져오기
-
-외부 서비스에 현재 로그인된 LMS 세션 쿠키를 동기화해야 할 경우 `getCookies`를 사용합니다.
-
-```swift
-let cookiesResult = try await LmsApi.shared.getCookies()
-let cookies = cookiesResult.lmsSession.cookies // LmsSessionCookie 배열 리턴
-```
-
-## SSU-Time에서 받는 데이터
-
-`getTodoList()`는 `LmsSubjectsResult`를 반환하며, 실제 과목 목록은 `result.subjects`에 들어 있습니다. SSU-Time에서 주로 활용하는 필드는 다음과 같습니다.
-
-### `Subject`
-- `subject.id`: 과목 ID
-- `subject.termId`: 학기 ID
-- `subject.termName`: 학기명
-- `subject.name`: 과목명
-- `subject.professor`: 교수명
-- `subject.totalStudents`: 수강 인원
-- `subject.todoList`: 할 일 목록 (`TodoList` 타입)
-- `subject.submissions`: 제출 정보
-
-### `TodoList`
-- `todo.title`: 할 일 제목
-- `todo.component_type`: 항목 타입 (예: `assignment`, `commons` 등)
-- `todo.assignment_id`: 과제 ID (없는 경우 null)
-- `todo.due_date`: 마감 시각 문자열
-
-`getTodoList(term)`는 빠른 조회를 위해 아래 필드는 빈 목록으로 반환합니다.
-
-```swift
-subject.attendances
-subject.discussions
-subject.scoredAssignments
-```
-
-출석, 공지, 점수까지 모두 필요한 화면에서는 `getSubjects(term:loadingState:completion:)`를 사용해야 합니다. SSU-Time의 할 일 중심 연동에는 `getTodoList(term:loadingState:completion:)`를 권장합니다.
-
-## Android/Kotlin 사용법
-
-KMP 또는 Android에서는 Gradle 의존성으로 사용할 수 있습니다.
-
-```kotlin
-dependencies {
-    implementation("io.github.chlwhdtn03:lms:1.2.4")
-}
-```
-
-KMP 프로젝트에서는 보통 `commonMain`에 추가합니다.
-
-```kotlin
-kotlin {
-    sourceSets {
-        commonMain.dependencies {
-            implementation("io.github.chlwhdtn03:lms:1.2.4")
-        }
-    }
-}
-```
-
-기본 흐름은 iOS와 같습니다. Android/Kotlin에서도 public API는 callback result 방식입니다.
-
-```kotlin
-import io.github.chlwhdtn03.LmsApi
-import kotlin.time.ExperimentalTime
-
-@OptIn(ExperimentalTime::class)
-fun loadTodosForAndroid() {
-    LmsApi.loginLMS(
-        id = "학번",
-        password = "비밀번호",
-    ) { loginResult ->
-        if (!loginResult.success) {
-            println(loginResult.errorMessage ?: "로그인 실패")
-        } else {
-            LmsApi.getTerms { termsResult ->
-                if (!termsResult.success) {
-                    println(termsResult.errorMessage ?: "학기 조회 실패")
-                } else {
-                    val term = termsResult.terms.lastOrNull()
-                    if (term == null) {
-                        println("조회 가능한 학기가 없습니다.")
-                    } else {
-                        LmsApi.getTodoList(
-                            term = term,
-                            loadingState = { progress ->
-                                println("loading: ${(progress * 100).toInt()}%")
-                            },
-                            completion = { subjectsResult ->
-                                if (!subjectsResult.success) {
-                                    println(subjectsResult.errorMessage ?: "todo 조회 실패")
-                                } else {
-                                    subjectsResult.subjects.forEach { subject ->
-                                        subject.todoList.forEach { todo ->
-                                            println("[${subject.name}] ${todo.title} / ${todo.due_date}")
-                                        }
-                                    }
-                                }
-                            },
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-```
-
-Android에서도 completion은 메인 스레드 호출을 보장하지 않습니다. Activity/Fragment UI를 갱신할 때는 `runOnUiThread { ... }`, Compose/ViewModel에서는 `viewModelScope.launch(Dispatchers.Main) { ... }` 같은 방식으로 메인 스레드로 넘겨서 처리하세요.
-
-## 공개 API
-
-### `LmsApi.loginLMS`
-
-```kotlin
-fun loginLMS(
-    id: String,
-    password: String,
-    completion: (LmsLoginResult) -> Unit,
-)
-```
-
-LMS 아이디와 비밀번호로 로그인합니다. 성공하면 `LmsLoginResult.success == true`이고, 이후 호출에서 같은 세션과 API 토큰을 사용합니다.
-
-### `LmsApi.getTerms`
-
-```kotlin
-fun getTerms(
-    completion: (LmsTermsResult) -> Unit,
-)
-```
-
-로그인한 사용자의 학기 목록을 가져옵니다. 실제 목록은 `result.terms`입니다.
-
-### `LmsApi.getTodoList`
-
-```kotlin
-@ExperimentalTime
-fun getTodoList(
-    term: Term,
-    loadingState: (Float) -> Unit = {},
-    completion: (LmsSubjectsResult) -> Unit,
-)
-```
-
-과목 기본 정보, 할 일 목록, 제출 정보를 빠르게 가져옵니다. SSU-Time 연동에서 권장하는 API입니다. 실제 과목 목록은 `result.subjects`입니다.
-
-### `LmsApi.getSubjects`
-
-```kotlin
-@ExperimentalTime
-fun getSubjects(
-    term: Term,
-    loadingState: (Float) -> Unit = {},
-    completion: (LmsSubjectsResult) -> Unit,
-)
-```
-
-과목 기본 정보, 할 일, 출석, 공지, 제출, 점수 정보를 모두 가져옵니다. 더 많은 API를 호출하므로 `getTodoList`보다 무겁습니다.
-
-### `LmsApi.getLoginInfo`
-
-```kotlin
-fun getLoginInfo(
-    completion: (LmsLoginInfoResult) -> Unit,
-)
-```
-
-로그인한 사용자의 이름, 학과, 로그인 ID, 이메일 정보를 가져옵니다.
-
-### `LmsApi.getCookies`
-
-```kotlin
-fun getCookies(
-    completion: (LmsCookiesResult) -> Unit,
-)
-```
-
-현재 로그인 세션의 LMS 쿠키를 가져옵니다. 실제 쿠키 목록은 `result.lmsSession.cookies`입니다. 로그인 이후에 호출해야 하며, 외부 서비스에 현재 LMS 세션을 전달해야 할 때 사용합니다.
-
-### Notice API
-
-```kotlin
-fun loadStartUpNotices(
-    pageNum: Int = 1,
-    completion: (StartUpNoticesResult) -> Unit,
-)
-
-fun loadScholarships(
-    pageNum: Int = 1,
-    completion: (ScholarshipNoticesResult) -> Unit,
-)
-```
-
-창업지원단 공지와 장학 공지를 가져옵니다.
-
-### U-Saint(유세인트) 조회 API
-
-LMS API와 마찬가지로 로그인(`loginLMS`) 완료 이후 동일 세션을 공유하여 호출할 수 있습니다. Swift에서는 `@Throws(Exception::class)` 매핑을 통해 native `async/await` 와 `throws` 패턴으로 안전하게 예외 처리를 하며 직접 호출할 수 있습니다.
-
-#### 시간표 조회 (`LmsApi.getTimetable`)
-```kotlin
-@Throws(Exception::class)
-suspend fun getTimetable(): Timetable
-```
-학생 개인의 유세인트 시간표 정보(학년도, 학기 및 과목별 강의실, 시간, 교수명 등)를 조회합니다.
-
-#### 성적 및 요약 조회 (`LmsApi.getGradeTable` / `getSemesterGradeSummaryTable`)
-```kotlin
-@Throws(Exception::class)
-suspend fun getGradeTable(year: String? = null, semester: Semester? = null): GradeTable
-
-@Throws(Exception::class)
-suspend fun getSemesterGradeSummaryTable(): SemesterGradeSummaryTable
-```
-- `getGradeTable`: 특정 학년도와 학기의 상세 성적 정보를 조회합니다. 파라미터가 모두 `null`인 경우 캐싱된 최근 학기 데이터를 가져옵니다.
-- `getSemesterGradeSummaryTable`: 전체 학기별 신청학점, 취득학점, 평점평균, 학기석차 및 전체석차 등이 기재된 성적 요약 정보를 조회합니다.
-
-#### 채플 조회 (`LmsApi.getChapelTable`)
-```kotlin
-@Throws(Exception::class)
-suspend fun getChapelTable(year: String? = null, semester: Semester? = null): ChapelInformation
-```
-특정 학년도와 학기의 채플 정보를 조회합니다. 좌석 현황(`ChapelSeatStatusTable`), 주차별 출결 현황(`ChapelAttendanceTable`), 결석계 신청 내역(`ChapelAbsenceTable`)이 포함되어 있습니다. (계절학기는 조회를 지원하지 않습니다)
-
-#### 등록금 납부 내역 조회 (`LmsApi.getTuitionTable`)
-```kotlin
-@Throws(Exception::class)
-suspend fun getTuitionTable(): TuitionTable
-```
-학년도/학기별 등록금 고지액, 장학 감면액, 납부일자 및 납부 상태 등의 등록금 납부 이력 데이터를 조회합니다.
-
-#### 장학 수혜 내역 조회 (`LmsApi.getScholarshipHistoryTable`)
-```kotlin
-@Throws(Exception::class)
-suspend fun getScholarshipHistoryTable(): ScholarshipHistoryTable
-```
-학기별 장학 수혜 내역(수혜 장학금명, 수혜 구분, 실제 장학금액 등)의 수혜 이력을 조회합니다.
-
-#### 졸업사정표 조회 (`LmsApi.getGraduateTable`)
-```kotlin
-@Throws(Exception::class)
-suspend fun getGraduateTable(): GraduateTable
-```
-졸업사정표 상의 이수 구분별 기준 요건 학점, 취득 학점, 과부족 학점 및 최종 판정 결과를 조회합니다.
-
-### Result 클래스
-
-모든 public API는 예외를 직접 던지지 않고 결과를 Result 래퍼 객체(비동기 콜백 방식)로 안전하게 전달하는 기능도 제공합니다.
-
-- `LmsLoginResult`: `success`, `errorMessage`
-- `LmsTermsResult`: `success`, `terms`, `errorMessage`
-- `LmsLoginInfoResult`: `success`, `info`, `errorMessage`
-- `LmsCookiesResult`: `success`, `lmsSession`, `errorMessage`
-- `LmsSubjectsResult`: `success`, `subjects`, `errorMessage`
-- `StartUpNoticesResult`: `success`, `notices`, `errorMessage`
-- `ScholarshipNoticesResult`: `success`, `notices`, `errorMessage`
-- `LmsTimetableResult`: `success`, `timetable`, `errorMessage`
-- `LmsGradeResult`: `success`, `gradeTable`, `errorMessage`
-- `LmsSemesterGradeSummaryResult`: `success`, `summaryTable`, `errorMessage`
-- `LmsChapelResult`: `success`, `chapelInformation`, `errorMessage`
-- `LmsTuitionResult`: `success`, `tuitionTable`, `errorMessage`
-- `LmsScholarshipHistoryResult`: `success`, `scholarshipHistoryTable`, `errorMessage`
-- `LmsGraduateTableResult`: `success`, `graduateTable`, `errorMessage`
-
-`success == false`이면 데이터 필드는 빈 목록 또는 `null`이고, 실패 이유는 `errorMessage`를 통해 확인할 수 있습니다.
-
-## 주요 모델
-
-### `Term`
-
-- `id`: 학기 ID
-- `name`: 학기명
-- `start_at`: 시작 시각
-- `end_at`: 종료 시각
-
-### `Subject`
-
-- `id`: 과목 ID
-- `termId`: 학기 ID
-- `termName`: 학기명
-- `name`: 과목명
-- `professor`: 교수명
-- `totalStudents`: 수강 인원
-- `todoList`: 할 일 목록
-- `attendances`: 주차별 출석 정보
-- `discussions`: 공지 목록
-- `submissions`: 제출 정보 목록
-- `scoredAssignments`: 점수 정보 목록
-
-### `TodoList`
-
-- `component_type`: 항목 타입. 예: `assignment`, `commons`
-- `assignment_id`: 과제 ID
-- `title`: 제목
-- `due_date`: 마감 시각
-
-### `LmsSession`
-
-- `cookies`: 현재 로그인 세션에서 사용하는 쿠키 목록
-
-### `LmsSessionCookie`
-
-- `name`: 쿠키 이름
-- `value`: 쿠키 값
-- `domain`: 쿠키 도메인
-- `path`: 쿠키 경로
-
-### `Submission`
-
-- `assignment_id`: 과제 ID
-- `attachments`: 제출 파일 목록
-- `attempt`: 제출 횟수
-- `cached_due_date`: LMS 캐시 기준 마감 시각
-- `late`: 지각 제출 여부
-- `preview_url`: 제출 파일 미리보기 주소
-- `submitted_at`: 제출 시각
-- `submission_type`: 제출 방식
-- `workflow_state`: 제출 상태. 예: `submitted`, `graded`, `unsubmitted`
-- `score`: 받은 점수
+2. 빌드 결과인 `LmsApi.xcframework`를 `LmsApi.xcframework.zip`으로 압축
+3. `swift package compute-checksum LmsApi.xcframework.zip` 실행하여 체크섬 확보
+4. `Package.swift`의 checksum 값 및 URL 경로 업데이트 후 커밋
+5. Git 태그(예: `1.2.4`) 생성 후 원격에 푸시
+6. GitHub에서 동일한 태그명으로 릴리스를 생성하고 `LmsApi.xcframework.zip`을 릴리스 에셋으로 업로드
+
+### iOS에서 XCFramework 직접 추가하기
+바이너리 프레임워크를 수동으로 내려받거나 직접 로컬 빌드하여 추가할 수도 있습니다.
+
+1. 로컬에서 아래 명령어로 빌드합니다:
+   ```bash
+   ./gradlew :library:assembleLmsApiReleaseXCFramework
+   ```
+2. 생성된 `library/build/XCFrameworks/release/LmsApi.xcframework` 폴더를 Xcode의 Project Navigator로 드래그하여 드롭합니다.
+3. Target 설정의 `General > Frameworks, Libraries, and Embedded Content` 항목에서 `LmsApi.xcframework`를 등록합니다.
+4. Kotlin Multiplatform static framework 이므로 Embed 속성은 `Do Not Embed`를 선택합니다.
+
+---
 
 ## 주의사항
-
-- `getTerms`, `getTodoList`, `getSubjects`, `getLoginInfo`, `getCookies`는 반드시 `loginLMS` 이후에 호출해야 합니다.
-- iOS에서는 Kotlin `object LmsApi`가 Swift의 `LmsApi.shared`로 보입니다.
-- iOS/Android의 LMS 핵심 API는 비동기 콜백 방식(Callback Result)을 지원하며, 동시에 Kotlin `suspend` 함수들을 public으로 직접 호출할 수 있도록 `@Throws` 어노테이션이 적용되어 Swift의 native `async/await` 및 `throws` 패턴으로도 안전하게 호출할 수 있습니다.
-- completion과 `loadingState`는 메인 스레드 호출을 보장하지 않습니다.
-- 이 라이브러리는 Swift로 작성된 라이브러리가 아니라 Kotlin/Native가 만든 XCFramework입니다.
-- 숭실대학교 LMS 로그인 페이지나 LearningX API 구조가 바뀌면 동작이 깨질 수 있습니다.
-- 이미 로그인한 세션과 토큰은 `LmsApi` 내부 상태로 유지됩니다.
+- `getTerms`, `getTodoList`, `getSubjects` 및 모든 유세인트(U-Saint) API는 반드시 `loginLMS` 인증이 완료된 후에 정상 호출 가능합니다.
+- iOS/Swift에서는 Kotlin `object LmsApi`가 싱글톤 객체로 변환되어 `LmsApi.shared` 형태로 접근합니다.
+- `loadingState` 콜백 및 비동기 결과 수신 스레드는 메인(UI) 스레드를 보장하지 않습니다. SwiftUI/UIKit/Compose 등 화면 렌더링에 반영할 경우 메인 디스패처/스레드로의 컨텍스트 스위칭이 필요합니다.
+- 본 프로젝트는 순수 Swift 라이브러리가 아닌, Kotlin Multiplatform으로 개발되어 Kotlin/Native를 통해 iOS용 XCFramework 및 Android AAR 형태로 바인딩되는 구조입니다.
+- 숭실대학교 LMS 로그인 페이지 규격이나 유세인트 Web Dynpro 컴포넌트의 HTML 속성 또는 SAP 세션 구조가 변경될 시 정보 로딩이 정상적으로 이루어지지 않을 수 있습니다.
