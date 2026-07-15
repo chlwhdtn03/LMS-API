@@ -924,7 +924,7 @@ object LmsApi {
             }
         }
 
-        if (!canvasLoginResponse.status.isSuccess()) {
+        if (!isAcceptedCanvasLoginStatus(canvasLoginResponse.status.value)) {
             throw IllegalStateException("Canvas 로그인에 실패했습니다 (${canvasLoginResponse.status.value}).")
         }
 
@@ -2071,9 +2071,127 @@ object LmsApi {
     @Throws(Exception::class)
     suspend fun getSemesterGradeSummaryTable(): SemesterGradeSummaryTable {
         checkLoggedIn()
-        val initialHtml = fetchWebDynproHtml("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMB3W0017", "ZCMB3W0017")
-        return parseSemesterGradeSummaryTable(initialHtml)
+        val url = "https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMB3W0017"
+        val appName = "ZCMB3W0017"
+        val currentYear = Clock.System.now().toString().take(4).toInt()
+
+        // A completed term search initializes the WebDynpro grade view and its summary table.
+        getGradeTable(currentYear.minus(1).toString(), Semester.FIRST)
+
+        var initialHtml = fetchWebDynproHtml(url, appName)
+        var summaryTable = parseSemesterGradeSummaryTable(initialHtml)
+
+        if (summaryTable.items.isEmpty()) {
+            webDynproCache.remove(appName)
+            getGradeTable(currentYear.minus(1).toString(), Semester.FIRST)
+            initialHtml = fetchWebDynproHtml(url, appName)
+            summaryTable = parseSemesterGradeSummaryTable(initialHtml)
+        }
+
+        val tableId = findSemesterGradeSummaryTableId(initialHtml)
+        if (tableId == null) return summaryTable
+        val visibleRowCount = summaryTable.items.size
+
+        if (visibleRowCount == 0) return summaryTable
+
+        var firstVisibleRow = visibleRowCount
+        repeat(20) {
+            val scrolledHtml = fetchWebDynproTableRows(
+                url = url,
+                appName = appName,
+                tableId = tableId,
+                firstVisibleRow = firstVisibleRow,
+            )
+            val scrolledTable = parseSemesterGradeSummaryTable(scrolledHtml)
+            if (scrolledTable.items.isEmpty()) return summaryTable
+
+            val merged = mergeSemesterGradeSummaryTables(summaryTable, scrolledTable)
+            if (merged.items.size == summaryTable.items.size) return summaryTable
+
+            summaryTable = merged
+            firstVisibleRow += visibleRowCount
+        }
+
+        return summaryTable
     }
+
+    private suspend fun fetchWebDynproTableRows(
+        url: String,
+        appName: String,
+        tableId: String,
+        firstVisibleRow: Int,
+    ): String {
+        val (secureId, formAction) = webDynproCache[appName]
+            ?: throw IllegalStateException("성적 페이지 세션을 초기화하지 못했습니다.")
+        val scrollEvent = "Table_VerticalScroll~E002Id~E004${tableId}~E005FirstVisibleItemIndex~E004${firstVisibleRow}~E005AccessType~E004SCROLLBAR~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
+        val focusInfo = escapeStr("{\"sFocussedId\":\"${tableId}\"}")
+        val formRequest = "Form_Request~E002Id~E004sap.client.SsrClient.form~E005Async~E004false~E005FocusInfo~E004${focusInfo}~E005Hash~E004~E005DomChanged~E004false~E005IsDirty~E004false~E003~E002ResponseData~E004delta~E003~E002~E003"
+        val actionFullUrl = if (formAction.startsWith("http")) formAction else "https://ecc.ssu.ac.kr:8443$formAction"
+        val response = client.submitForm(
+            url = actionFullUrl,
+            formParameters = parameters {
+                append("sap-charset", "utf-8")
+                append("sap-wd-secure-id", secureId)
+                append("fesrAppName", appName)
+                append("fesrUseBeacon", "true")
+                append("SAPEVENTQUEUE", listOf(scrollEvent, formRequest).joinToString("~E001"))
+            },
+        ) {
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                append(HttpHeaders.Accept, "*/*")
+                append("X-Requested-With", "XMLHttpRequest")
+                append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
+            }
+        }
+        val responseBody = response.bodyAsText().decodeHtmlEntities().decodeHtmlEntities()
+        val nextSecureId = Regex("""name="sap-wd-secure-id"\s+value="([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(responseBody)?.groupValues?.get(1) ?: secureId
+        val nextFormAction = Regex("""<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(responseBody)?.groupValues?.get(1)?.decodeHtmlEntities()?.decodeHtmlEntities() ?: formAction
+        webDynproCache[appName] = Pair(nextSecureId, nextFormAction)
+        return responseBody
+    }
+
+    internal fun findSemesterGradeSummaryTableId(html: String): String? {
+        val decodedHtml = html.decodeHtmlEntities()
+        val controlRegex = Regex("""<(?:div|table)\b(?=[^>]*\bct="(?:ST|CT)")(?=[^>]*\bid="([^"]+)")[^>]*>""", RegexOption.IGNORE_CASE)
+        val controls = controlRegex.findAll(decodedHtml).toList()
+
+        for ((index, control) in controls.withIndex()) {
+            val end = controls.getOrNull(index + 1)?.range?.first ?: decodedHtml.length
+            val controlHtml = decodedHtml.substring(control.range.first, end)
+            if (parseSemesterGradeSummaryTable(controlHtml).items.isNotEmpty()) {
+                return control.groupValues[1]
+            }
+        }
+
+        val summaryRow = Regex("""<tr\b[^>]*>([\s\S]*?)</tr>""", RegexOption.IGNORE_CASE)
+            .findAll(decodedHtml)
+            .firstOrNull { parseSemesterGradeSummaryTable(it.value).items.isNotEmpty() }
+            ?: return null
+        val tableTag = Regex("""<table\b[^>]*\bid="([^"]+)"[^>]*>""", RegexOption.IGNORE_CASE)
+            .findAll(decodedHtml.substring(0, summaryRow.range.first))
+            .lastOrNull()
+            ?: return null
+        return tableTag.groupValues[1]
+            .removeSuffix("-content")
+            .removeSuffix("-table")
+    }
+
+    internal fun mergeSemesterGradeSummaryTables(
+        first: SemesterGradeSummaryTable,
+        second: SemesterGradeSummaryTable,
+    ): SemesterGradeSummaryTable {
+        val merged = linkedMapOf<String, SemesterGradeSummaryCell>()
+        (first.items + second.items).forEach { cell ->
+            val key = "${cell.year}:${cell.semester?.code.orEmpty()}"
+            if (key !in merged) merged[key] = cell
+        }
+        return SemesterGradeSummaryTable(items = merged.values.toList())
+    }
+
+    internal fun isAcceptedCanvasLoginStatus(statusCode: Int): Boolean = statusCode in 200..399
 
     /**
      * 유세인트 학기별 성적 요약 정보를 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
