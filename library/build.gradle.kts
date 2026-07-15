@@ -102,9 +102,7 @@ kotlin {
 mavenPublishing {
     publishToMavenCentral()
 
-    if (project.hasProperty("signing.keyId") || project.hasProperty("signing.secretKeyRingFile")) {
-        signAllPublications()
-    }
+    signAllPublications()
 
     coordinates(group.toString(), "lms", version.toString())
 
