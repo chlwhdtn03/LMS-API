@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "io.github.chlwhdtn03"
-version = "1.5.4"
+version = "1.5.5"
 
 val ktor_version: String by project
 
@@ -39,6 +39,9 @@ kotlin {
         }
     }
     macosArm64()
+    js {
+        browser()
+    }
 //    val iosX64 = iosX64()
     val iosArm64 = iosArm64()
 //    val iosSimulatorArm64 = iosSimulatorArm64()
@@ -57,16 +60,21 @@ kotlin {
         jvmMain.dependencies {
             implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
             implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
+            implementation("io.ktor:ktor-client-cio:${ktor_version}")
         }
         commonMain.dependencies {
             implementation("com.aallam.openai:openai-client:4.1.0")
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
             implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.7.1")
             implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
-            implementation("io.ktor:ktor-client-cio:${ktor_version}")
             implementation("io.ktor:ktor-client-core:${ktor_version}")
             implementation("io.ktor:ktor-client-content-negotiation:${ktor_version}")
             implementation("io.ktor:ktor-serialization-kotlinx-json:${ktor_version}")
+        }
+
+        jsMain.dependencies {
+            implementation("io.ktor:ktor-client-js:${ktor_version}")
+            implementation(npm("node-forge", "1.4.0"))
         }
 
         commonTest.dependencies {
@@ -77,7 +85,7 @@ kotlin {
         androidMain.dependencies {
             implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
             implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
-            // implementation("io.ktor:ktor-client-cio:${ktor_version}")
+            implementation("io.ktor:ktor-client-cio:${ktor_version}")
         }
 
         iosMain.dependencies {
@@ -94,7 +102,9 @@ kotlin {
 mavenPublishing {
     publishToMavenCentral()
 
-    signAllPublications()
+    if (project.hasProperty("signing.keyId") || project.hasProperty("signing.secretKeyRingFile")) {
+        signAllPublications()
+    }
 
     coordinates(group.toString(), "lms", version.toString())
 

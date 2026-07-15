@@ -35,6 +35,10 @@ internal val client = HttpClient() {
         json(lmsJson)
     }
     followRedirects = true
+}.apply {
+    requestPipeline.intercept(io.ktor.client.request.HttpRequestPipeline.State) {
+        adjustUrlForProxy(context.url)
+    }
 }
 
 private val apiScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -150,30 +154,64 @@ object LmsApi {
         }
     }
 
+    private fun canvasUrl(path: String): String {
+        val domain = if (proxyBaseUrl.isNotEmpty()) "$proxyBaseUrl/proxy-canvas" else "https://canvas.ssu.ac.kr"
+        return if (path.startsWith("/")) "$domain$path" else "$domain/$path"
+    }
+
+    private fun lmsUrl(path: String): String {
+        val domain = if (proxyBaseUrl.isNotEmpty()) "$proxyBaseUrl/proxy-lms" else "https://lms.ssu.ac.kr"
+        return if (path.startsWith("/")) "$domain$path" else "$domain/$path"
+    }
+
+    private fun saintUrl(path: String): String {
+        val domain = if (proxyBaseUrl.isNotEmpty()) "$proxyBaseUrl/proxy-saint" else "https://saint.ssu.ac.kr"
+        return if (path.startsWith("/")) "$domain$path" else "$domain/$path"
+    }
+
     @OptIn(ExperimentalTime::class)
     private suspend fun fetchTerms(): List<Term> {
-        return client.get("https://canvas.ssu.ac.kr/learningx/api/v1/users/${lmsId}/terms?include_invited_course_contained=true") {
-            headers { append("Authorization", "Bearer $apiBearerToken") }
-        }.body<Terms>().enrollment_terms
+        val response = client.get(canvasUrl("/learningx/api/v1/users/${lmsId}/terms?include_invited_course_contained=true")) {
+            headers { 
+                if (apiBearerToken.isNotBlank()) append("Authorization", "Bearer $apiBearerToken")
+            }
+        }
+        val bodyText = response.bodyAsText()
+        if (response.status.value != 200) {
+            throw IllegalStateException("LMS 학기 조회 실패 (${response.status.value}): $bodyText")
+        }
+        try {
+            return lmsJson.decodeFromString<Terms>(bodyText).enrollment_terms
+        } catch (e: Exception) {
+            try {
+                return lmsJson.decodeFromString<List<Term>>(bodyText)
+            } catch (e2: Exception) {
+                throw IllegalStateException("LMS 학기 파싱 실패. 응답: $bodyText", e)
+            }
+        }
     }
 
     @OptIn(ExperimentalTime::class)
     private suspend fun fetchLectures(term: Term): List<Lecture> {
-        return client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/courses?term_ids[]=${term.id}") {
-            headers { append("Authorization", "Bearer $apiBearerToken") }
+        return client.get(canvasUrl("/learningx/api/v1/learn_activities/courses?term_ids[]=${term.id}")) {
+            headers { 
+                if (apiBearerToken.isNotBlank()) append("Authorization", "Bearer $apiBearerToken")
+            }
         }.body<List<Lecture>>()
     }
 
     @OptIn(ExperimentalTime::class)
     private suspend fun fetchLoginInfo(): Info {
-        return client.get("https://lms.ssu.ac.kr/api/v1/users/${lmsId}") {
+        return client.get(lmsUrl("/api/v1/users/${lmsId}")) {
         }.body<Info>()
     }
 
     @OptIn(ExperimentalTime::class)
     private suspend fun fetchLearnStatuses(term: Term): LearnStatuses {
-        return client.get("https://canvas.ssu.ac.kr/learningx/api/v1/learn_activities/learnstatus?term_ids=${term.id}&type=subsection") {
-            headers { append("Authorization", "Bearer $apiBearerToken") }
+        return client.get(canvasUrl("/learningx/api/v1/learn_activities/learnstatus?term_ids=${term.id}&type=subsection")) {
+            headers { 
+                if (apiBearerToken.isNotBlank()) append("Authorization", "Bearer $apiBearerToken")
+            }
         }.body<LearnStatuses>()
     }
 
@@ -200,7 +238,7 @@ object LmsApi {
     }
 
     private suspend fun fetchAssignmentGroups(courseId: Int): List<AssignmentGroup> {
-        return client.get("https://canvas.ssu.ac.kr/api/v1/courses/${courseId}/assignment_groups") {
+        return client.get(canvasUrl("/api/v1/courses/${courseId}/assignment_groups")) {
             url {
                 parameters.append("exclude_response_fields[]", "description")
                 parameters.append("exclude_response_fields[]", "rubric")
@@ -214,21 +252,23 @@ object LmsApi {
 
     private suspend fun fetchAssignmentDetails(courseId: Int, assignmentId: Int): TodoAssignmentDetail {
         return client
-            .get("https://canvas.ssu.ac.kr/api/v1/courses/$courseId/assignments/$assignmentId")
+            .get(canvasUrl("/api/v1/courses/$courseId/assignments/$assignmentId"))
             .body<TodoAssignmentDetail>()
     }
 
     private suspend fun fetchTodoDetail(courseId: Int): List<TodoDetail> {
         return client
-            .get("https://canvas.ssu.ac.kr/learningx/api/v1/courses/${courseId}/modules?include_detail=true") {
-                headers { append("Authorization", "Bearer $apiBearerToken") }
+            .get(canvasUrl("/learningx/api/v1/courses/${courseId}/modules?include_detail=true")) {
+                headers { 
+                    if (apiBearerToken.isNotBlank()) append("Authorization", "Bearer $apiBearerToken")
+                }
             }
             .body<List<TodoDetail>>()
     }
 
 
     private suspend fun fetchSubmissions(courseId: Int): Pair<List<Submission>, Boolean> {
-        val response = client.get("https://canvas.ssu.ac.kr/api/v1/courses/${courseId}/students/submissions") {
+        val response = client.get(canvasUrl("/api/v1/courses/${courseId}/students/submissions")) {
             url {
                 parameters.append("per_page", "100")
             }
@@ -243,9 +283,9 @@ object LmsApi {
     }
 
     private suspend fun fetchDiscussions(courseId: Int): List<Discussion> {
-        return client.get("https://canvas.ssu.ac.kr/api/v1/courses/${courseId}/discussion_topics?only_announcements=true&per_page=40&page=1&filter_by=all&no_avatar_fallback=1&include[]=sections_user_count&include[]=sections") {
+        return client.get(canvasUrl("/api/v1/courses/${courseId}/discussion_topics?only_announcements=true&per_page=40&page=1&filter_by=all&no_avatar_fallback=1&include[]=sections_user_count&include[]=sections")) {
             headers {
-                append("Referer", "https://canvas.ssu.ac.kr/courses/${courseId}/announcements")
+                append("Referer", canvasUrl("/courses/${courseId}/announcements"))
             }
         }.body<List<Discussion>>()
     }
@@ -769,35 +809,78 @@ object LmsApi {
                 append("userid", id)
                 append("pwd", password)
             }
-        ).headers.getAll("Set-Cookie")
-        val token = loginResponse?.find { it.contains("sToken") }
-            ?.substringAfter("sToken=")
-            ?.substringBefore(";") ?: ""
-        println("sToken : $token")
+        )
+        val bodyText = loginResponse.bodyAsText()
+        var token = ""
+        if (bodyText.contains("sToken=")) {
+            val rawToken = bodyText.substringAfter("sToken=").substringBefore("&").substringBefore("'")
+            val regex = Regex("""x(2B|2F|3D|5F|78|79|7A)""")
+            token = regex.replace(rawToken) { matchResult ->
+                val hex = matchResult.groupValues[1]
+                hex.toIntOrNull(16)?.toChar()?.toString() ?: matchResult.value
+            }
+        }
+
+        if (token.isBlank()) {
+            val cookies = loginResponse.headers.getAll("Set-Cookie")
+            token = cookies?.find { it.contains("sToken") }
+                ?.substringAfter("sToken=")
+                ?.substringBefore(";") ?: ""
+        }
+        println("sToken received: ${token.isNotBlank()}")
 
         if (token.isBlank())
             throw IllegalArgumentException("아이디 또는 비밀번호가 일치하지 않습니다.")
 
-        val redirectURL = client.get(LMS_CERT_URL) {
+        val certResponse = client.get(LMS_CERT_URL) {
             url {
                 parameters.append("sToken", token)
                 parameters.append("sIdno", id)
             }
-        }.bodyAsText()
+        }
+        println("Cert Response Status: ${certResponse.status}")
+        val certBody = certResponse.bodyAsText()
+        println("Cert Body Length: ${certBody.length}")
+
+        var redirectURL = certBody
             .substringAfter("iframe.src=\"")
             .substringBefore("\";")
+        if (!redirectURL.startsWith("http")) {
+            redirectURL = "https://canvas.ssu.ac.kr$redirectURL"
+        }
+        if (proxyBaseUrl.isNotEmpty()) {
+            redirectURL = redirectURL.replace("https://canvas.ssu.ac.kr", "$proxyBaseUrl/proxy-canvas")
+        }
 
         val apiToken = client.get(redirectURL)
+        println("Api Token Response Status: ${apiToken.status}")
 
-        apiBearerToken = apiToken
-            .headers.getAll("Set-Cookie")?.find { it.contains("xn_api_token") }
-            ?.substringAfter("xn_api_token=")
-            ?.substringBefore(";") ?: ""
+        var extractedApiToken = ""
+        if (redirectURL.contains("api_token=")) {
+            extractedApiToken = redirectURL.substringAfter("api_token=").substringBefore("&")
+        }
+        val canvasDomain = if (proxyBaseUrl.isNotEmpty()) proxyBaseUrl else "https://canvas.ssu.ac.kr"
+        val lmsDomain = if (proxyBaseUrl.isNotEmpty()) proxyBaseUrl else "https://lms.ssu.ac.kr"
+        val canvasCookies = client.cookies(canvasDomain)
+        val lmsCookies = client.cookies(lmsDomain)
+        val cookieToken = (canvasCookies + lmsCookies).find { it.name == "xn_api_token" }?.value ?: ""
 
-        if (apiBearerToken.isBlank())
-            throw RuntimeException("API 토큰값을 불러오지 못했습니다. 다시 시도해주세요.")
-
-        println("Bearer Token : $apiBearerToken")
+        apiBearerToken = if (extractedApiToken.isNotBlank()) {
+            extractedApiToken
+        } else if (cookieToken.isNotBlank()) {
+            cookieToken
+        } else {
+            apiToken.headers.getAll("Set-Cookie")?.find { it.contains("xn_api_token") }
+                ?.substringAfter("xn_api_token=")
+                ?.substringBefore(";") ?: ""
+        }
+        if (apiBearerToken.isBlank()) {
+            if (proxyBaseUrl.isEmpty()) {
+                throw RuntimeException("API 토큰값을 불러오지 못했습니다. 다시 시도해주세요.")
+            } else {
+                println("Warning: API Token is blank on browser target. Relying on HttpOnly session cookies.")
+            }
+        }
 
         val body = apiToken.bodyAsText()
         val pem = body
@@ -809,16 +892,24 @@ object LmsApi {
             .substringAfter("window.loginCryption(\"")
             .substringBefore("\"")
 
-        val decrypted = pemToString(rawPem = pem, rawPw = raw_pw)
+        val authenticityToken = Regex(
+            """<input\b(?=[^>]*\bname=["']authenticity_token["'])(?=[^>]*\bvalue=["']([^"']+)["'])[^>]*>""",
+            RegexOption.IGNORE_CASE,
+        ).find(body)?.groupValues?.get(1)?.decodeHtmlEntities().orEmpty()
 
-        client.submitForm(
-            url = LMS_POST_LOGIN,
+        val decryptedPassword = pemToString(rawPem = pem, rawPw = raw_pw)
+
+        val canvasLoginResponse = client.submitForm(
+            url = canvasUrl("/login/canvas"),
             formParameters = parameters {
                 append("utf8", "✓")
+                if (authenticityToken.isNotBlank()) {
+                    append("authenticity_token", authenticityToken)
+                }
                 append("redirect_to_ssl", "1")
                 append("after_login_url", "")
                 append("pseudonym_session[unique_id]", id)
-                append("pseudonym_session[password]", decrypted)
+                append("pseudonym_session[password]", decryptedPassword)
                 append("pseudonym_session[remember_me]", "0")
             }
         ) {
@@ -833,22 +924,28 @@ object LmsApi {
             }
         }
 
-        client.get(LMS_CONFIRM_LOGIN) {
+        if (!canvasLoginResponse.status.isSuccess()) {
+            throw IllegalStateException("Canvas 로그인에 실패했습니다 (${canvasLoginResponse.status.value}).")
+        }
+
+        val canvasConfirmationResponse = client.get(canvasUrl("/?login_success=1")) {
             headers {
                 append(HttpHeaders.Referrer, redirectURL)
             }
         }
+        println("Canvas login confirmation status: ${canvasConfirmationResponse.status}")
 
-        client.get("https://saint.ssu.ac.kr/webSSO/sso.jsp") {
+        val saintSsoResponse = client.get(saintUrl("/webSSO/sso.jsp")) {
             headers {
                 append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
                 append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
             }
         }
+        println("U-Saint SSO status: ${saintSsoResponse.status}")
 
         isLoggined = true
         lmsId = id
-        println(lmsId + "으로 로그인에 성공하였습니다.")
+        println("LMS login succeeded.")
         return isLoggined // 토큰값이 비어있거나 Null이면 로그인 실패
     }
 
@@ -1230,26 +1327,84 @@ object LmsApi {
         return parseTimetable(html)
     }
 
-    /**
-     * 유세인트 개인 시간표 정보를 조회하여 가져옵니다.
-     *
-     * @return 유세인트 개인 시간표 정보
-     */
     @Throws(Exception::class)
-    suspend fun getTimetable(): Timetable {
+    suspend fun getTimetable(): Timetable = getTimetable(null, null)
+
+    @Throws(Exception::class)
+    suspend fun getTimetable(year: String?, semester: Semester?): Timetable {
         checkLoggedIn()
-        return getTimetable("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW2102")
+
+        if (year == null && semester == null) {
+            val cachedYear = cachedLatestGradeYear
+            val cachedSem = cachedLatestGradeSemester
+            if (cachedYear != null && cachedSem != null) {
+                return getTimetable(cachedYear, cachedSem)
+            }
+        }
+
+        var currentHtml = fetchWebDynproHtml("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW2102", "ZCMW2102")
+
+        val cached = webDynproCache["ZCMW2102"] ?: throw IllegalStateException("시간표 페이지 세션을 초기화하지 못했습니다.")
+        val secureId = cached.first
+        val formAction = cached.second
+
+        val peryrLabelMatch = Regex("""<label\b[^>]*\bfor="([^"]+)"[^>]*>(?:(?!</?label\b).)*?학년도""", RegexOption.IGNORE_CASE).find(currentHtml)
+        val peryrMatch = Regex("""id="([^"]+:VIW_MAIN\.PERYR)"""").find(currentHtml)
+        val peryrId = peryrLabelMatch?.groupValues?.get(1)
+            ?: peryrMatch?.groupValues?.get(1)
+            ?: "ZCMW_PERIOD_RE.ID_0DC742680F42DA9747594D1AE51A0C69:VIW_MAIN.PERYR"
+
+        val peridLabelMatch = Regex("""<label\b[^>]*\bfor="([^"]+)"[^>]*>(?:(?!</label>).)*?학기""", RegexOption.IGNORE_CASE).find(currentHtml)
+        val peridMatch = Regex("""id="([^"]+:VIW_MAIN\.PERID)"""").find(currentHtml)
+        val peridId = peridLabelMatch?.groupValues?.get(1)
+            ?: peridMatch?.groupValues?.get(1)
+            ?: "ZCMW_PERIOD_RE.ID_0DC742680F42DA9747594D1AE51A0C69:VIW_MAIN.PERID"
+
+        val btnSearchLabelMatch = Regex("""<(?:div|button)\b[^>]*\bid="([^"]+)"[^>]*ct="B"[^>]*>(?:(?!<(?:div|button)\b).)*?조회""", RegexOption.IGNORE_CASE).find(currentHtml)
+        val btnSearchMatch = Regex("""id="([^"]+:VIW_MAIN\.BTN_SEARCH)"""").find(currentHtml)
+        val btnSearchId = btnSearchLabelMatch?.groupValues?.get(1)
+            ?: btnSearchMatch?.groupValues?.get(1)
+            ?: "ZCMW2102.ID_0001:VIW_MAIN.BTN_SEARCH"
+
+        val buttonEvent = "Button_Press~E002Id~E004${btnSearchId}~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
+        val focusInfo = escapeStr("{\"sFocussedId\":\"${btnSearchId}\"}")
+        val buttonFormReq = "Form_Request~E002Id~E004sap.client.SsrClient.form~E005Async~E004false~E005FocusInfo~E004${focusInfo}~E005Hash~E004~E005DomChanged~E004false~E005IsDirty~E004false~E003~E002ResponseData~E004delta~E003~E002~E003"
+
+        val eventQueue = if (year != null && semester != null) {
+            val yearEvent = "ComboBox_Select~E002Id~E004${peryrId}~E005Key~E004${year}~E005ByEnter~E004false~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
+            val semesterEvent = "ComboBox_Select~E002Id~E004${peridId}~E005Key~E004${semester.code}~E005ByEnter~E004false~E003~E002ClientAction~E004submit~E005ResponseData~E004delta~E003~E002~E003"
+            listOf(yearEvent, semesterEvent, buttonEvent, buttonFormReq).joinToString("~E001")
+        } else {
+            listOf(buttonEvent, buttonFormReq).joinToString("~E001")
+        }
+
+        val actionFullUrl = if (formAction.startsWith("http")) formAction else "https://ecc.ssu.ac.kr:8443$formAction"
+        val response = client.submitForm(
+            url = actionFullUrl,
+            formParameters = parameters {
+                append("sap-charset", "utf-8")
+                append("sap-wd-secure-id", secureId)
+                append("fesrAppName", "ZCMW2102")
+                append("fesrUseBeacon", "true")
+                append("SAPEVENTQUEUE", eventQueue)
+            }
+        ) {
+            headers {
+                append(HttpHeaders.UserAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+                append(HttpHeaders.Accept, "*/*")
+                append("X-Requested-With", "XMLHttpRequest")
+                append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
+            }
+        }
+        
+        val html = response.bodyAsText()
+        return parseTimetable(html)
     }
 
-    /**
-     * 유세인트 개인 시간표 정보를 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
-     *
-     * @param completion 결과 수신 콜백
-     */
-    fun getTimetable(completion: (LmsTimetableResult) -> Unit) {
+    fun getTimetable(year: String?, semester: Semester?, completion: (LmsTimetableResult) -> Unit) {
         apiScope.launch {
             val result = try {
-                LmsTimetableResult(success = true, timetable = getTimetable())
+                LmsTimetableResult(success = true, timetable = getTimetable(year, semester))
             } catch (throwable: Throwable) {
                 LmsTimetableResult(success = false, errorMessage = throwable.toResultMessage())
             }
@@ -1257,9 +1412,13 @@ object LmsApi {
         }
     }
 
+    fun getTimetable(completion: (LmsTimetableResult) -> Unit) {
+        getTimetable(null, null, completion)
+    }
+
     fun parseTimetable(html: String): Timetable {
         // Extract Year and Semester
-        val labelRegex = Regex("""(?si)<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학년도""")
+        val labelRegex = Regex("""<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>)[\s\S])*?학년도""", RegexOption.IGNORE_CASE)
         val inputValRegex = { id: String -> Regex("""id="$id"[^>]*value="([^"]+)"""", RegexOption.IGNORE_CASE) }
         
         var year = ""
@@ -1267,7 +1426,7 @@ object LmsApi {
             year = inputValRegex(id).find(html)?.groupValues?.get(1)?.decodeHtmlEntities() ?: ""
         }
         
-        val semesterLabelRegex = Regex("""(?si)<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학기""")
+        val semesterLabelRegex = Regex("""<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>)[\s\S])*?학기""", RegexOption.IGNORE_CASE)
         var semester = ""
         semesterLabelRegex.find(html)?.groupValues?.get(1)?.let { id ->
             semester = inputValRegex(id).find(html)?.groupValues?.get(1)?.decodeHtmlEntities() ?: ""
@@ -1351,8 +1510,8 @@ object LmsApi {
         val tbodyStart = tableContent.indexOf("<tbody", ignoreCase = true)
         val tbodyContent = if (tbodyStart != -1) tableContent.substring(tbodyStart) else tableContent
 
-        val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
-        val tdRegex = Regex("""(?si)<td\b[^>]*cc="(\d+)"[^>]*>(.*?)</td>""")
+        val trRegex = Regex("""<tr\b[^>]*>([\s\S]*?)</tr>""", RegexOption.IGNORE_CASE)
+        val tdRegex = Regex("""<td\b[^>]*cc="(\d+)"[^>]*>([\s\S]*?)</td>""", RegexOption.IGNORE_CASE)
 
         val timetableCells = mutableListOf<TimetableCell>()
 
@@ -1564,8 +1723,8 @@ object LmsApi {
 
     fun parseGraduateTable(html: String): GraduateTable {
         val decodedHtml = html.decodeHtmlEntities()
-        val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
-        val tdRegex = Regex("""(?si)<td\b[^>]*>(.*?)</td>""")
+        val trRegex = Regex("""<tr\b[^>]*>([\s\S]*?)</tr>""", RegexOption.IGNORE_CASE)
+        val tdRegex = Regex("""<td\b[^>]*>([\s\S]*?)</td>""", RegexOption.IGNORE_CASE)
         
         val cellsList = mutableListOf<GraduateTableCell>()
         val trMatches = trRegex.findAll(decodedHtml)
@@ -1654,8 +1813,8 @@ object LmsApi {
 
     fun parseTuitionTable(html: String): TuitionTable {
         val decodedHtml = html.decodeHtmlEntities()
-        val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
-        val tdRegex = Regex("""(?si)<td\b[^>]*>(.*?)</td>""")
+        val trRegex = Regex("""<tr\b[^>]*>([\s\S]*?)</tr>""", RegexOption.IGNORE_CASE)
+        val tdRegex = Regex("""<td\b[^>]*>([\s\S]*?)</td>""", RegexOption.IGNORE_CASE)
         
         val cellsList = mutableListOf<TuitionCell>()
         val trMatches = trRegex.findAll(decodedHtml)
@@ -1726,8 +1885,8 @@ object LmsApi {
 
     fun parseScholarshipHistoryTable(html: String): ScholarshipHistoryTable {
         val decodedHtml = html.decodeHtmlEntities()
-        val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
-        val tdRegex = Regex("""(?si)<td\b[^>]*>(.*?)</td>""")
+        val trRegex = Regex("""<tr\b[^>]*>([\s\S]*?)</tr>""", RegexOption.IGNORE_CASE)
+        val tdRegex = Regex("""<td\b[^>]*>([\s\S]*?)</td>""", RegexOption.IGNORE_CASE)
         
         val cellsList = mutableListOf<ScholarshipHistoryCell>()
         val trMatches = trRegex.findAll(decodedHtml)
@@ -1934,8 +2093,8 @@ object LmsApi {
 
     fun parseSemesterGradeSummaryTable(html: String): SemesterGradeSummaryTable {
         val decodedHtml = html.decodeHtmlEntities()
-        val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
-        val tdRegex = Regex("""(?si)<(td|th)\b[^>]*>(.*?)</\1>""")
+        val trRegex = Regex("""<tr\b[^>]*>([\s\S]*?)</tr>""", RegexOption.IGNORE_CASE)
+        val tdRegex = Regex("""<(td|th)\b[^>]*>([\s\S]*?)</\1>""", RegexOption.IGNORE_CASE)
         
         val cellsList = mutableListOf<SemesterGradeSummaryCell>()
         val trMatches = trRegex.findAll(decodedHtml).toList()
@@ -1984,8 +2143,8 @@ object LmsApi {
         val finalYear = if (parsedYear.isNotBlank()) parsedYear else (defaultYear ?: "")
         val finalSemester = (parsedSemester ?: defaultSemester) ?: Semester.FIRST
 
-        val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
-        val tdRegex = Regex("""(?si)<(td|th)\b[^>]*>(.*?)</\1>""")
+        val trRegex = Regex("""<tr\b[^>]*>([\s\S]*?)</tr>""", RegexOption.IGNORE_CASE)
+        val tdRegex = Regex("""<(td|th)\b[^>]*>([\s\S]*?)</\1>""", RegexOption.IGNORE_CASE)
         
         val cellsList = mutableListOf<GradeCell>()
         val trMatches = trRegex.findAll(decodedHtml).toList()
@@ -2347,8 +2506,8 @@ object LmsApi {
 
     private fun parseRawTable(tableHtml: String): RawTable? {
         val decodedHtml = tableHtml.decodeHtmlEntities()
-        val trRegex = Regex("""(?si)<tr\b[^>]*>(.*?)</tr>""")
-        val tdRegex = Regex("""(?si)<(td|th)\b[^>]*>(.*?)</\1>""")
+        val trRegex = Regex("""<tr\b[^>]*>([\s\S]*?)</tr>""", RegexOption.IGNORE_CASE)
+        val tdRegex = Regex("""<(td|th)\b[^>]*>([\s\S]*?)</\1>""", RegexOption.IGNORE_CASE)
         
         val allRows = mutableListOf<List<String>>()
         for (trMatch in trRegex.findAll(decodedHtml)) {
@@ -2368,7 +2527,7 @@ object LmsApi {
 
     private fun parseYearFromHtml(html: String): String {
         val decodedHtml = html.decodeHtmlEntities()
-        val labelRegex = Regex("""(?si)<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학년도""")
+        val labelRegex = Regex("""<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>)[\s\S])*?학년도""", RegexOption.IGNORE_CASE)
         val inputValRegex = { id: String -> Regex("""id="$id"[^>]*value="([^"]+)"""", RegexOption.IGNORE_CASE) }
         
         var parsedYear = ""
@@ -2385,7 +2544,7 @@ object LmsApi {
 
     private fun parseSemesterFromHtml(html: String): Semester? {
         val decodedHtml = html.decodeHtmlEntities()
-        val semesterLabelRegex = Regex("""(?si)<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>).)*?학기""")
+        val semesterLabelRegex = Regex("""<label\b[^>]*for="([^"]+)"[^>]*>(?:(?!</label>)[\s\S])*?학기""", RegexOption.IGNORE_CASE)
         val inputValRegex = { id: String -> Regex("""id="$id"[^>]*value="([^"]+)"""", RegexOption.IGNORE_CASE) }
         
         var parsedSemesterStr = ""
@@ -2450,3 +2609,7 @@ fun String.stripHtmlTags(): String {
 }
 
 internal expect fun pemToString(rawPem: String, rawPw: String): String
+
+internal expect fun adjustUrlForProxy(urlBuilder: io.ktor.http.URLBuilder)
+
+internal expect val proxyBaseUrl: String

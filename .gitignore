@@ -17,3 +17,4 @@ library/src/iosTest/kotlin/IosLMSTest.kt
 library/src/jvmTest/kotlin/JvmLMSTest.kt
 library/src/macosArm64Test/kotlin/MacosLMSTest.kt
 /library/src/commonTest/kotlin/NoticeTest.kt
+/library/src/jsTest/kotlin/JsLMSTest.kt
