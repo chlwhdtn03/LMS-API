@@ -899,7 +899,7 @@ object LmsApi {
 
         val decryptedPassword = pemToString(rawPem = pem, rawPw = raw_pw)
 
-        val canvasLoginResponse = client.submitForm(
+        client.submitForm(
             url = canvasUrl("/login/canvas"),
             formParameters = parameters {
                 append("utf8", "✓")
@@ -922,10 +922,6 @@ object LmsApi {
                     "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
                 )
             }
-        }
-
-        if (!isAcceptedCanvasLoginStatus(canvasLoginResponse.status.value)) {
-            throw IllegalStateException("Canvas 로그인에 실패했습니다 (${canvasLoginResponse.status.value}).")
         }
 
         val canvasConfirmationResponse = client.get(canvasUrl("/?login_success=1")) {
