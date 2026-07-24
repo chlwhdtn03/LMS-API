@@ -11,10 +11,8 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.*
 import io.ktor.serialization.kotlinx.json.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
@@ -29,16 +27,53 @@ private val lmsJson = Json {
     coerceInputValues = true
 }
 
+private class ResettableCookiesStorage : CookiesStorage {
+    private val mutex = Mutex()
+    private var delegate: CookiesStorage = AcceptAllCookiesStorage()
+
+    override suspend fun get(requestUrl: Url): List<Cookie> {
+        mutex.lock()
+        return try {
+            delegate.get(requestUrl)
+        } finally {
+            mutex.unlock()
+        }
+    }
+
+    override suspend fun addCookie(requestUrl: Url, cookie: Cookie) {
+        mutex.lock()
+        try {
+            delegate.addCookie(requestUrl, cookie)
+        } finally {
+            mutex.unlock()
+        }
+    }
+
+    suspend fun clear() {
+        mutex.lock()
+        try {
+            delegate.close()
+            delegate = AcceptAllCookiesStorage()
+        } finally {
+            mutex.unlock()
+        }
+    }
+
+    override fun close() {
+        delegate.close()
+    }
+}
+
+private val lmsCookiesStorage = ResettableCookiesStorage()
+
 internal val client = HttpClient() {
-    install(HttpCookies)
+    install(HttpCookies) {
+        storage = lmsCookiesStorage
+    }
     install(ContentNegotiation) {
         json(lmsJson)
     }
     followRedirects = true
-}.apply {
-    requestPipeline.intercept(io.ktor.client.request.HttpRequestPipeline.State) {
-        adjustUrlForProxy(context.url)
-    }
 }
 
 private val apiScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -68,11 +103,13 @@ internal fun shouldSendTodoSnapshot(sample: Double = Random.nextDouble()): Boole
 }
 
 object LmsApi {
+    private const val CANVAS_BASE_URL = "https://canvas.ssu.ac.kr"
+    private const val LMS_BASE_URL = "https://lms.ssu.ac.kr"
+    private const val SAINT_BASE_URL = "https://saint.ssu.ac.kr"
     private const val LMS_LOGIN_URL = "https://smartid.ssu.ac.kr/Symtra_sso/smln_pcs.asp"
     private const val LMS_CERT_URL = "https://lms.ssu.ac.kr/xn-sso/gw-cb.php"
-    private const val LMS_POST_LOGIN = "https://canvas.ssu.ac.kr/login/canvas"
-    private const val LMS_CONFIRM_LOGIN = "https://canvas.ssu.ac.kr/?login_success=1"
     var isLoggined = false
+        private set
     private var lmsId = ""
     private var apiBearerToken = ""
     private val webDynproCache = mutableMapOf<String, Pair<String, String>>()
@@ -84,6 +121,7 @@ object LmsApi {
     private var cachedChapelPeridId: String? = null
     private var cachedChapelBtnSearchId: String? = null
     private var cachedChapelInformation: ChapelInformation? = null
+    private val sessionMutex = Mutex()
 
     private data class AssignmentMetadata(
         val groupName: String,
@@ -154,19 +192,36 @@ object LmsApi {
         }
     }
 
+    private fun clearCachedUserData() {
+        webDynproCache.clear()
+        cachedLatestGradeYear = null
+        cachedLatestGradeSemester = null
+        cachedLatestChapelYear = null
+        cachedLatestChapelSemester = null
+        cachedChapelPeryrId = null
+        cachedChapelPeridId = null
+        cachedChapelBtnSearchId = null
+        cachedChapelInformation = null
+    }
+
+    private suspend fun resetSession() {
+        isLoggined = false
+        lmsId = ""
+        apiBearerToken = ""
+        clearCachedUserData()
+        lmsCookiesStorage.clear()
+    }
+
     private fun canvasUrl(path: String): String {
-        val domain = if (proxyBaseUrl.isNotEmpty()) "$proxyBaseUrl/proxy-canvas" else "https://canvas.ssu.ac.kr"
-        return if (path.startsWith("/")) "$domain$path" else "$domain/$path"
+        return if (path.startsWith("/")) "$CANVAS_BASE_URL$path" else "$CANVAS_BASE_URL/$path"
     }
 
     private fun lmsUrl(path: String): String {
-        val domain = if (proxyBaseUrl.isNotEmpty()) "$proxyBaseUrl/proxy-lms" else "https://lms.ssu.ac.kr"
-        return if (path.startsWith("/")) "$domain$path" else "$domain/$path"
+        return if (path.startsWith("/")) "$LMS_BASE_URL$path" else "$LMS_BASE_URL/$path"
     }
 
     private fun saintUrl(path: String): String {
-        val domain = if (proxyBaseUrl.isNotEmpty()) "$proxyBaseUrl/proxy-saint" else "https://saint.ssu.ac.kr"
-        return if (path.startsWith("/")) "$domain$path" else "$domain/$path"
+        return if (path.startsWith("/")) "$SAINT_BASE_URL$path" else "$SAINT_BASE_URL/$path"
     }
 
     @OptIn(ExperimentalTime::class)
@@ -201,8 +256,8 @@ object LmsApi {
     }
 
     @OptIn(ExperimentalTime::class)
-    private suspend fun fetchLoginInfo(): Info {
-        return client.get(lmsUrl("/api/v1/users/${lmsId}")) {
+    private suspend fun fetchLoginInfo(userId: String = lmsId): Info {
+        return client.get(lmsUrl("/api/v1/users/${userId}")) {
         }.body<Info>()
     }
 
@@ -794,15 +849,23 @@ object LmsApi {
      */
     @Throws(Exception::class)
     internal suspend fun loginLMS(id: String, password: String): Boolean {
-        webDynproCache.clear()
-        cachedLatestGradeYear = null
-        cachedLatestGradeSemester = null
-        cachedLatestChapelYear = null
-        cachedLatestChapelSemester = null
-        cachedChapelPeryrId = null
-        cachedChapelPeridId = null
-        cachedChapelBtnSearchId = null
-        cachedChapelInformation = null
+        sessionMutex.lock()
+        try {
+            resetSession()
+            return try {
+                performLogin(id, password)
+            } catch (throwable: Throwable) {
+                withContext(NonCancellable) {
+                    resetSession()
+                }
+                throw throwable
+            }
+        } finally {
+            sessionMutex.unlock()
+        }
+    }
+
+    private suspend fun performLogin(id: String, password: String): Boolean {
         val loginResponse = client.submitForm(
             url = LMS_LOGIN_URL,
             formParameters = parameters {
@@ -846,23 +909,19 @@ object LmsApi {
             .substringAfter("iframe.src=\"")
             .substringBefore("\";")
         if (!redirectURL.startsWith("http")) {
-            redirectURL = "https://canvas.ssu.ac.kr$redirectURL"
-        }
-        if (proxyBaseUrl.isNotEmpty()) {
-            redirectURL = redirectURL.replace("https://canvas.ssu.ac.kr", "$proxyBaseUrl/proxy-canvas")
+            redirectURL = "$CANVAS_BASE_URL$redirectURL"
         }
 
         val apiToken = client.get(redirectURL)
         println("Api Token Response Status: ${apiToken.status}")
 
-        var extractedApiToken = ""
-        if (redirectURL.contains("api_token=")) {
-            extractedApiToken = redirectURL.substringAfter("api_token=").substringBefore("&")
-        }
-        val canvasDomain = if (proxyBaseUrl.isNotEmpty()) proxyBaseUrl else "https://canvas.ssu.ac.kr"
-        val lmsDomain = if (proxyBaseUrl.isNotEmpty()) proxyBaseUrl else "https://lms.ssu.ac.kr"
-        val canvasCookies = client.cookies(canvasDomain)
-        val lmsCookies = client.cookies(lmsDomain)
+        val extractedApiToken = redirectURL
+            .takeIf { it.contains("api_token=") }
+            ?.substringAfter("api_token=")
+            ?.substringBefore("&")
+            .orEmpty()
+        val canvasCookies = client.cookies(CANVAS_BASE_URL)
+        val lmsCookies = client.cookies(LMS_BASE_URL)
         val cookieToken = (canvasCookies + lmsCookies).find { it.name == "xn_api_token" }?.value ?: ""
 
         apiBearerToken = if (extractedApiToken.isNotBlank()) {
@@ -875,11 +934,7 @@ object LmsApi {
                 ?.substringBefore(";") ?: ""
         }
         if (apiBearerToken.isBlank()) {
-            if (proxyBaseUrl.isEmpty()) {
-                throw RuntimeException("API 토큰값을 불러오지 못했습니다. 다시 시도해주세요.")
-            } else {
-                println("Warning: API Token is blank on browser target. Relying on HttpOnly session cookies.")
-            }
+            throw RuntimeException("API 토큰값을 불러오지 못했습니다. 다시 시도해주세요.")
         }
 
         val body = apiToken.bodyAsText()
@@ -939,10 +994,15 @@ object LmsApi {
         }
         println("U-Saint SSO status: ${saintSsoResponse.status}")
 
-        isLoggined = true
+        val loginInfo = fetchLoginInfo(id)
+        if (loginInfo.user_login != id) {
+            throw IllegalStateException("로그인 사용자 검증에 실패했습니다.")
+        }
+
         lmsId = id
+        isLoggined = true
         println("LMS login succeeded.")
-        return isLoggined // 토큰값이 비어있거나 Null이면 로그인 실패
+        return true
     }
 
     /**
@@ -979,6 +1039,15 @@ object LmsApi {
         checkLoggedIn()
 
         return fetchLmsSession()
+    }
+
+    internal suspend fun logout() {
+        sessionMutex.lock()
+        try {
+            resetSession()
+        } finally {
+            sessionMutex.unlock()
+        }
     }
 
     /**
@@ -1025,6 +1094,18 @@ object LmsApi {
     fun getCookies(completion: (LmsCookiesResult) -> Unit) {
         launchCookiesResult(completion) {
             getCookies()
+        }
+    }
+
+    /**
+     * 현재 로그인 세션과 사용자별 캐시를 제거한 뒤 completion 콜백을 호출합니다.
+     *
+     * @param completion 로그아웃 완료 콜백
+     */
+    fun logout(completion: () -> Unit) {
+        apiScope.launch {
+            logout()
+            completion()
         }
     }
 
@@ -1330,15 +1411,7 @@ object LmsApi {
     suspend fun getTimetable(year: String?, semester: Semester?): Timetable {
         checkLoggedIn()
 
-        if (year == null && semester == null) {
-            val cachedYear = cachedLatestGradeYear
-            val cachedSem = cachedLatestGradeSemester
-            if (cachedYear != null && cachedSem != null) {
-                return getTimetable(cachedYear, cachedSem)
-            }
-        }
-
-        var currentHtml = fetchWebDynproHtml("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW2102", "ZCMW2102")
+        val currentHtml = fetchWebDynproHtml("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW2102", "ZCMW2102")
 
         val cached = webDynproCache["ZCMW2102"] ?: throw IllegalStateException("시간표 페이지 세션을 초기화하지 못했습니다.")
         val secureId = cached.first
@@ -2187,8 +2260,6 @@ object LmsApi {
         return SemesterGradeSummaryTable(items = merged.values.toList())
     }
 
-    internal fun isAcceptedCanvasLoginStatus(statusCode: Int): Boolean = statusCode in 200..399
-
     /**
      * 유세인트 학기별 성적 요약 정보를 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
      *
@@ -2723,7 +2794,3 @@ fun String.stripHtmlTags(): String {
 }
 
 internal expect fun pemToString(rawPem: String, rawPw: String): String
-
-internal expect fun adjustUrlForProxy(urlBuilder: io.ktor.http.URLBuilder)
-
-internal expect val proxyBaseUrl: String

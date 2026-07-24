@@ -302,7 +302,13 @@ fun loadLMSForAndroid() {
 ```kotlin
 fun loginLMS(id: String, password: String, completion: (LmsLoginResult) -> Unit)
 ```
-LMS 아이디와 비밀번호로 로그인합니다. 성공 시 내부 세션이 생성되며 유세인트 세션도 자동으로 공유됩니다.
+LMS 아이디와 비밀번호로 로그인합니다. 새 로그인 시도 전에 기존 세션을 제거하며, 로그인 후 사용자 정보가 실제로 조회된 경우에만 성공 처리합니다. 성공 시 유세인트 세션도 자동으로 공유됩니다.
+
+#### `LmsApi.logout`
+```kotlin
+fun logout(completion: () -> Unit)
+```
+현재 로그인 상태와 쿠키, 사용자별 성적·시간표·채플 캐시를 제거합니다.
 
 #### `LmsApi.getTerms`
 ```kotlin

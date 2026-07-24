@@ -31,8 +31,3 @@ internal actual fun pemToString(rawPem: String, rawPw: String): String {
         return cipher.doFinal(Base64.decode(rawPw)).toString(Charsets.UTF_8)
     }
 }
-
-internal actual fun adjustUrlForProxy(urlBuilder: io.ktor.http.URLBuilder) {
-}
-
-internal actual val proxyBaseUrl: String = ""

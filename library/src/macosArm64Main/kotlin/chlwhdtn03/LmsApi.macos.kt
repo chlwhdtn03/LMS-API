@@ -113,8 +113,3 @@ private fun CFDataRef.toByteArray(): ByteArray {
     }
     return bytes
 }
-
-internal actual fun adjustUrlForProxy(urlBuilder: io.ktor.http.URLBuilder) {
-}
-
-internal actual val proxyBaseUrl: String = ""

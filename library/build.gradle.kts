@@ -39,9 +39,6 @@ kotlin {
         }
     }
     macosArm64()
-    js {
-        browser()
-    }
 //    val iosX64 = iosX64()
     val iosArm64 = iosArm64()
 //    val iosSimulatorArm64 = iosSimulatorArm64()
@@ -70,11 +67,6 @@ kotlin {
             implementation("io.ktor:ktor-client-core:${ktor_version}")
             implementation("io.ktor:ktor-client-content-negotiation:${ktor_version}")
             implementation("io.ktor:ktor-serialization-kotlinx-json:${ktor_version}")
-        }
-
-        jsMain.dependencies {
-            implementation("io.ktor:ktor-client-js:${ktor_version}")
-            implementation(npm("node-forge", "1.4.0"))
         }
 
         commonTest.dependencies {
