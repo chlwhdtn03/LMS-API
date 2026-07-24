@@ -39,10 +39,7 @@ kotlin {
         }
     }
     macosArm64()
-//    val iosX64 = iosX64()
     val iosArm64 = iosArm64()
-//    val iosSimulatorArm64 = iosSimulatorArm64()
-//    linuxX64()
 
     listOf(iosArm64).forEach { iosTarget ->
         iosTarget.binaries.framework {

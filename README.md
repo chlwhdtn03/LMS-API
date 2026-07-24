@@ -8,10 +8,23 @@
 
 ## 지원 플랫폼
 
-- Android (JVM)
+- Android
+- JVM
 - iOS device: `iosArm64`
-- iOS simulator: `iosX64`, `iosSimulatorArm64`
 - macOS Apple Silicon: `macosArm64`
+
+현재 소스 빌드에는 JavaScript target과 iOS simulator target(`iosX64`, `iosSimulatorArm64`)이 포함되어 있지 않습니다. iOS 앱 연동은 GitHub Release에 배포된 XCFramework를 사용하는 SPM 방식을 권장합니다.
+
+---
+
+## 리팩토링 이후 알아둘 점
+
+- 기존 앱에서 사용하는 `LmsApi` 싱글톤과 로그인·조회 콜백 API는 그대로 유지됩니다.
+- JavaScript 지원과 관련 의존성은 제거되었습니다.
+- `parse*`, `merge*`, `find*`, `fetchWebDynproHtml` 같은 원본 응답 처리 함수는 내부 구현으로 변경되었습니다. 앱에서는 이 함수들을 직접 호출하지 말고 `get*` 조회 API를 사용해야 합니다.
+- `LmsApi`는 프로세스 내에서 로그인 세션, 토큰, 쿠키와 조회 캐시를 공유합니다. 새 로그인을 시작하면 이전 사용자의 세션과 캐시를 먼저 비우며, `logout`도 로그인 상태와 사용자별 캐시를 제거합니다.
+- 로그인 및 LMS 조회(`getTerms`, `getTodoList`, `getSubjects` 등)는 외부에 콜백 API로 제공됩니다. U-Saint 조회 API는 Kotlin의 `suspend` 함수와 결과 콜백을 모두 제공합니다.
+- 기능별 구현은 `internal` 서비스로 분리되었지만 외부 사용법은 변경되지 않았습니다. 내부 구조와 기능 추가 규칙은 [내부 구현 가이드](library/src/commonMain/kotlin/io/github/chlwhdtn03/internal/README.md)를 참고하세요.
 
 ---
 
@@ -37,6 +50,7 @@ import LmsApi
 
 > [!NOTE]
 > SPM은 내부적으로 GitHub Release에 업로드된 `LmsApi.xcframework.zip`을 내려받아 사용하도록 구성되어 있습니다.
+> SPM에서 설치되는 바이너리 버전은 루트 `Package.swift`의 Release URL을 따르며, Maven 배포 버전과 별도로 갱신될 수 있습니다.
 
 ### 2. Android / Kotlin에서 Gradle로 추가하기
 
@@ -45,7 +59,7 @@ Android 또는 Kotlin Multiplatform(KMP) 프로젝트에서는 Gradle 의존성�
 **Android 단일 프로젝트 (`build.gradle.kts`):**
 ```kotlin
 dependencies {
-    implementation("io.github.chlwhdtn03:lms:1.2.4")
+    implementation("io.github.chlwhdtn03:lms:1.5.5")
 }
 ```
 
@@ -54,7 +68,7 @@ dependencies {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("io.github.chlwhdtn03:lms:1.2.4")
+            implementation("io.github.chlwhdtn03:lms:1.5.5")
         }
     }
 }
@@ -71,17 +85,11 @@ LMS 조회 기능과 유세인트(U-Saint) 조회 기능은 모두 **LMS 로그�
 import LmsApi
 
 func performLogin() {
-    Task {
-        do {
-            // LMS 로그인을 진행합니다. (성공 시 유세인트 세션도 함께 유지됩니다.)
-            let loginSuccess = try await LmsApi.shared.loginLMS(id: "학번", password: "비밀번호")
-            if loginSuccess {
-                print("로그인 성공")
-            } else {
-                print("로그인 실패")
-            }
-        } catch {
-            print("로그인 중 에러 발생: \(error.localizedDescription)")
+    LmsApi.shared.loginLMS(id: "학번", password: "비밀번호") { result in
+        if result.success {
+            print("로그인 성공")
+        } else {
+            print("로그인 실패: \(result.errorMessage ?? "알 수 없는 오류")")
         }
     }
 }
@@ -92,7 +100,6 @@ func performLogin() {
 import io.github.chlwhdtn03.LmsApi
 
 fun performLogin() {
-    // Android/Kotlin에서는 콜백(Callback Result) API 혹은 Coroutine suspend 함수를 호출할 수 있습니다.
     LmsApi.loginLMS(id = "학번", password = "비밀번호") { result ->
         if (result.success) {
             println("로그인 성공")
@@ -107,7 +114,7 @@ fun performLogin() {
 
 ## 1. 유세인트(U-Saint) 조회 기능 사용법
 
-유세인트 조회 기능은 시간표, 성적, 채플, 등록금, 장학금, 졸업사정표 데이터를 비동기식으로 파싱하여 반환합니다. Swift에서는 native `async/await` 와 `throws` 패턴으로 예외 처리를 하며 직접 호출할 수 있고, Android/Kotlin에서도 suspend 함수 혹은 콜백 API를 이용해 손쉽게 호출 가능합니다.
+유세인트 조회 기능은 시간표, 성적, 채플, 등록금, 장학금, 졸업사정표 데이터를 비동기식으로 파싱하여 반환합니다. Kotlin에서는 `suspend` 함수 또는 결과 콜백을 사용할 수 있으며, iOS에서는 Kotlin/Native가 변환한 비동기 API를 Swift `async/await` 또는 결과 콜백 형태로 사용할 수 있습니다.
 
 ### iOS (Swift - Async/Await) 사용 예시
 ```swift
@@ -231,33 +238,40 @@ fun loadUSaintForAndroid() {
 
 LMS 조회 기능은 학기 목록, 강의 목록, 할 일(과제 및 동영상 시청 기한), 출석, 공지, 제출 및 점수 정보를 조회할 수 있는 기능을 제공합니다.
 
-### iOS (Swift - Async/Await) 사용 예시
+### iOS (Swift - Callback) 사용 예시
 ```swift
 import LmsApi
 
 func loadLMSTodos() {
-    Task {
-        do {
-            // 1. 수강 학기 목록 조회 및 최신 학기 선택
-            let terms = try await LmsApi.shared.getTerms()
-            guard let latestTerm = terms.last else {
-                print("조회 가능한 학기가 없습니다.")
+    LmsApi.shared.getTerms { termsResult in
+        guard termsResult.success else {
+            print("학기 조회 실패: \(termsResult.errorMessage ?? "알 수 없는 오류")")
+            return
+        }
+
+        guard let latestTerm = termsResult.terms.last else {
+            print("조회 가능한 학기가 없습니다.")
+            return
+        }
+
+        LmsApi.shared.getTodoList(
+            term: latestTerm,
+            loadingState: { progress in
+                print("진행률: \(Int(progress.floatValue * 100))%")
+            },
+            postHogDistinctId: nil
+        ) { subjectsResult in
+            guard subjectsResult.success else {
+                print("할 일 조회 실패: \(subjectsResult.errorMessage ?? "알 수 없는 오류")")
                 return
             }
-            
-            // 2. 할 일 목록 조회 (getSubjects 대비 빠르고 가볍게 기한 정보만 파싱)
-            let subjects = try await LmsApi.shared.getTodoList(term: latestTerm, loadingState: { progress in
-                print("진행률: \(Int(progress.floatValue * 100))%")
-            }, postHogDistinctId: nil)
-            
-            for subject in subjects {
+
+            for subject in subjectsResult.subjects {
                 print("과목: \(subject.name)")
                 for todo in subject.todoList {
                     print("- \(todo.title) (마감일: \(todo.due_date))")
                 }
             }
-        } catch {
-            print("LMS 조회 에러: \(error.localizedDescription)")
         }
     }
 }
@@ -304,6 +318,8 @@ fun loginLMS(id: String, password: String, completion: (LmsLoginResult) -> Unit)
 ```
 LMS 아이디와 비밀번호로 로그인합니다. 새 로그인 시도 전에 기존 세션을 제거하며, 로그인 후 사용자 정보가 실제로 조회된 경우에만 성공 처리합니다. 성공 시 유세인트 세션도 자동으로 공유됩니다.
 
+로그인 여부는 외부에서 읽기만 가능한 `LmsApi.isLoggined`로 확인할 수 있습니다. 기존 호환성을 위해 현재 철자를 유지합니다.
+
 #### `LmsApi.logout`
 ```kotlin
 fun logout(completion: () -> Unit)
@@ -319,8 +335,17 @@ fun getTerms(completion: (LmsTermsResult) -> Unit)
 #### `LmsApi.getTodoList`
 ```kotlin
 fun getTodoList(term: Term, loadingState: (Float) -> Unit = {}, completion: (LmsSubjectsResult) -> Unit)
+
+fun getTodoList(
+    term: Term,
+    loadingState: (Float) -> Unit = {},
+    postHogDistinctId: String?,
+    completion: (LmsSubjectsResult) -> Unit,
+)
 ```
 과목 기본 정보와 할 일 목록(과제, 동영상 등), 제출 정보를 빠르게 파싱하여 가져옵니다.
+
+`postHogDistinctId`가 없는 오버로드를 사용하거나 `null`을 전달하면 분석 데이터를 전송하지 않습니다. 식별자를 전달하면 식별자별 하루 한 번 전송 여부를 20% 비율로 샘플링하며, 선택된 경우 Todo 동기화 통계와 항목 상태 스냅샷을 PostHog로 전송합니다. 이를 의도한 앱에서만 사용하세요.
 
 #### `LmsApi.getSubjects`
 ```kotlin
@@ -356,13 +381,16 @@ fun loadScholarships(pageNum: Int = 1, completion: (ScholarshipNoticesResult) ->
 #### `LmsApi.getTimetable`
 ```kotlin
 suspend fun getTimetable(): Timetable
+suspend fun getTimetable(year: String?, semester: Semester?): Timetable
 fun getTimetable(completion: (LmsTimetableResult) -> Unit)
+fun getTimetable(year: String?, semester: Semester?, completion: (LmsTimetableResult) -> Unit)
 ```
-개인의 유세인트 시간표를 조회합니다.
+개인의 유세인트 시간표를 조회합니다. 학년도와 학기를 생략하면 유세인트가 제공하는 기본 조회 기간을 사용합니다.
 
 #### `LmsApi.getGradeTable`
 ```kotlin
 suspend fun getGradeTable(year: String? = null, semester: Semester? = null): GradeTable
+fun getGradeTable(completion: (LmsGradeResult) -> Unit)
 fun getGradeTable(year: String?, semester: Semester?, completion: (LmsGradeResult) -> Unit)
 ```
 지정된 학년도 및 학기의 성적 상세 내역을 조회합니다. 파라미터가 모두 `null`일 경우 캐싱된 최신 학기 성적을 반환합니다.
@@ -377,6 +405,7 @@ fun getSemesterGradeSummaryTable(completion: (LmsSemesterGradeSummaryResult) -> 
 #### `LmsApi.getChapelTable`
 ```kotlin
 suspend fun getChapelTable(year: String? = null, semester: Semester? = null): ChapelInformation
+fun getChapelTable(completion: (LmsChapelResult) -> Unit)
 fun getChapelTable(year: String?, semester: Semester?, completion: (LmsChapelResult) -> Unit)
 ```
 지정된 학년도 및 학기의 채플 정보(좌석 번호, 주차별 출결, 결석계 신청 현황)를 조회합니다. (계절학기 조회 불가)
@@ -407,10 +436,11 @@ fun getGraduateTable(completion: (LmsGraduateTableResult) -> Unit)
 ## 주요 데이터 모델 (Models)
 
 ### `Semester` (학기 구분 Enum)
-- `FIRST`: 1학기 (코드: "10")
-- `SUMMER`: 여름학기 (코드: "11")
-- `SECOND`: 2학기 (코드: "20")
-- `WINTER`: 겨울학기 (코드: "21")
+
+- `FIRST`: 1학기 (코드: `"090"`)
+- `SUMMER`: 여름학기 (코드: `"091"`)
+- `SECOND`: 2학기 (코드: `"092"`)
+- `WINTER`: 겨울학기 (코드: `"093"`)
 
 ### `Timetable` & `TimetableCell` (시간표)
 - `year`: 학년도 (예: "2026학년도")
@@ -517,6 +547,7 @@ fun getGraduateTable(completion: (LmsGraduateTableResult) -> Unit)
 - `due_date`: 마감 기한
 
 ### `Submission` (LMS 제출 정보)
+
 - `assignment_id`: 과제 고유 ID
 - `attachments`: 첨부파일 목록
 - `attempt`: 제출 시도 횟수
@@ -527,6 +558,27 @@ fun getGraduateTable(completion: (LmsGraduateTableResult) -> Unit)
 - `submission_type`: 제출 유형
 - `workflow_state`: 제출 상태 (예: `submitted`, `graded`, `unsubmitted`)
 - `score`: 획득 점수
+
+---
+
+## 개발 및 검증
+
+파서와 공개 범위 등 외부 서버가 필요 없는 테스트는 일반 JVM 테스트로 실행합니다.
+
+```bash
+./gradlew :library:jvmTest
+```
+
+실제 LMS/U-Saint 네트워크 API와 각 콜백 오버로드를 함께 검증하려면 테스트 계정을 환경 변수로 전달합니다. 계정 정보가 없으면 통합 테스트는 외부 서버를 호출하지 않고 종료됩니다.
+
+```bash
+LMS_TEST_ID="학번" \
+LMS_TEST_PASSWORD="비밀번호" \
+./gradlew :library:jvmTest \
+  --tests "io.github.chlwhdtn03.LmsApiFullIntegrationTest"
+```
+
+필요하면 `LMS_TEST_TERM_ID`, `LMS_TEST_YEAR`, `LMS_TEST_SEMESTER`도 지정할 수 있습니다. `LMS_TEST_SEMESTER`는 `FIRST`, `SECOND`, `090`, `092`, `1학기`, `2학기` 형식을 지원합니다. 실제 계정 정보는 소스 코드나 커밋에 저장하지 마세요.
 
 ---
 
@@ -550,7 +602,7 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "LmsApi",
-            url: "https://github.com/chlwhdtn03/LMS-API/releases/download/1.2.4/LmsApi.xcframework.zip",
+            url: "https://github.com/chlwhdtn03/LMS-API/releases/download/<release-tag>/LmsApi.xcframework.zip",
             checksum: "<checksum calculated for the ZIP file>"
         )
     ]
@@ -558,7 +610,8 @@ let package = Package(
 ```
 
 **체크리스트:**
-- GitHub Release 태그와 `Package.swift`의 URL 버젼 태그(`1.2.4`)가 매칭되어야 합니다.
+
+- GitHub Release 태그와 `Package.swift` URL의 `<release-tag>`가 일치해야 합니다.
 - `checksum`은 빌드 완료된 `LmsApi.xcframework.zip` 파일 기준으로 계산된 체크섬이어야 합니다.
 - 체크섬은 아래 명령어로 추출할 수 있습니다:
   ```bash
@@ -570,7 +623,7 @@ let package = Package(
 2. 빌드 결과인 `LmsApi.xcframework`를 `LmsApi.xcframework.zip`으로 압축
 3. `swift package compute-checksum LmsApi.xcframework.zip` 실행하여 체크섬 확보
 4. `Package.swift`의 checksum 값 및 URL 경로 업데이트 후 커밋
-5. Git 태그(예: `1.2.4`) 생성 후 원격에 푸시
+5. 배포할 버전의 Git 태그를 생성한 후 원격에 푸시
 6. GitHub에서 동일한 태그명으로 릴리스를 생성하고 `LmsApi.xcframework.zip`을 릴리스 에셋으로 업로드
 
 ### iOS에서 XCFramework 직접 추가하기
@@ -584,11 +637,15 @@ let package = Package(
 3. Target 설정의 `General > Frameworks, Libraries, and Embedded Content` 항목에서 `LmsApi.xcframework`를 등록합니다.
 4. Kotlin Multiplatform static framework 이므로 Embed 속성은 `Do Not Embed`를 선택합니다.
 
+현재 소스 설정으로 직접 빌드한 XCFramework에는 `iosArm64` slice만 포함되므로 실제 iOS 기기용입니다.
+
 ---
 
 ## 주의사항
+
 - `getTerms`, `getTodoList`, `getSubjects` 및 모든 유세인트(U-Saint) API는 반드시 `loginLMS` 인증이 완료된 후에 정상 호출 가능합니다.
 - iOS/Swift에서는 Kotlin `object LmsApi`가 싱글톤 객체로 변환되어 `LmsApi.shared` 형태로 접근합니다.
+- `LmsApi`는 단일 사용자 세션을 공유하므로 같은 프로세스에서 여러 계정의 요청을 동시에 처리하는 용도로 사용할 수 없습니다.
 - `loadingState` 콜백 및 비동기 결과 수신 스레드는 메인(UI) 스레드를 보장하지 않습니다. SwiftUI/UIKit/Compose 등 화면 렌더링에 반영할 경우 메인 디스패처/스레드로의 컨텍스트 스위칭이 필요합니다.
 - 본 프로젝트는 순수 Swift 라이브러리가 아닌, Kotlin Multiplatform으로 개발되어 Kotlin/Native를 통해 iOS용 XCFramework 및 Android AAR 형태로 바인딩되는 구조입니다.
 - 숭실대학교 LMS 로그인 페이지 규격이나 유세인트 Web Dynpro 컴포넌트의 HTML 속성 또는 SAP 세션 구조가 변경될 시 정보 로딩이 정상적으로 이루어지지 않을 수 있습니다.
