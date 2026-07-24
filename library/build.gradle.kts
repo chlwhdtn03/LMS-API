@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "io.github.chlwhdtn03"
-version = "1.5.5"
+version = "1.6.0"
 
 val ktor_version: String by project
 
@@ -97,7 +97,7 @@ mavenPublishing {
 
     pom {
         name = "LMS-API"
-        description = "LMS 정보를 가져오는 라이브러리 입니다."
+        description = "LMS/유세인트 정보를 가져오는 라이브러리 입니다."
         inceptionYear = "2026"
         url = "https://github.com/chlwhdtn03/LMS-API"
         licenses {
