@@ -6,23 +6,14 @@ import io.github.chlwhdtn03.data.Lms.Timetable
 import io.github.chlwhdtn03.data.Lms.TimetableCell
 import io.github.chlwhdtn03.decodeHtmlEntities
 import io.github.chlwhdtn03.stripHtmlTags
-import io.ktor.client.*
-import io.ktor.client.request.*
-import io.ktor.client.request.forms.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
 
 /** 시간표 조회 요청 생성과 HTML 파싱을 담당합니다. */
 internal class TimetableService(
-    private val client: HttpClient,
     private val webDynpro: WebDynproService,
 ) {
     suspend fun getTimetable(year: String?, semester: Semester?): Timetable {
-        val currentHtml = webDynpro.fetchHtml(TIMETABLE_URL, APP_NAME)
-        val (secureId, formAction) = webDynpro.requireSession(
-            APP_NAME,
-            "시간표 페이지 세션을 초기화하지 못했습니다.",
-        )
+        var context = webDynpro.openSession(TIMETABLE_URL, APP_NAME)
+        val currentHtml = context.html
 
         val yearControlId = Regex(
             """<label\b[^>]*\bfor="([^"]+)"[^>]*>(?:(?!</?label\b).)*?학년도""",
@@ -68,29 +59,11 @@ internal class TimetableService(
             listOf(buttonEvent, formRequest)
         }
 
-        val actionUrl = if (formAction.startsWith("http")) {
-            formAction
-        } else {
-            "$ECC_BASE_URL$formAction"
-        }
-        val response = client.submitForm(
-            url = actionUrl,
-            formParameters = parameters {
-                append("sap-charset", "utf-8")
-                append("sap-wd-secure-id", secureId)
-                append("fesrAppName", APP_NAME)
-                append("fesrUseBeacon", "true")
-                append("SAPEVENTQUEUE", events.joinToString("~E001"))
-            },
-        ) {
-            headers {
-                append(HttpHeaders.UserAgent, USER_AGENT)
-                append(HttpHeaders.Accept, "*/*")
-                append("X-Requested-With", "XMLHttpRequest")
-                append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
-            }
-        }
-        return parseTimetable(response.bodyAsText())
+        context = webDynpro.submitEvents(
+            context = context,
+            eventQueue = events.joinToString("~E001"),
+        )
+        return parseTimetable(context.html)
     }
 
     fun parseTimetable(html: String): Timetable {
@@ -254,8 +227,5 @@ internal class TimetableService(
         const val DEFAULT_SEMESTER_CONTROL_ID =
             "ZCMW_PERIOD_RE.ID_0DC742680F42DA9747594D1AE51A0C69:VIW_MAIN.PERID"
         const val DEFAULT_SEARCH_BUTTON_ID = "ZCMW2102.ID_0001:VIW_MAIN.BTN_SEARCH"
-        const val USER_AGENT =
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
     }
 }

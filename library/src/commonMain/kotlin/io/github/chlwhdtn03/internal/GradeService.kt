@@ -4,18 +4,12 @@ import io.github.chlwhdtn03.GradeCache
 import io.github.chlwhdtn03.data.Lms.*
 import io.github.chlwhdtn03.decodeHtmlEntities
 import io.github.chlwhdtn03.stripHtmlTags
-import io.ktor.client.*
-import io.ktor.client.request.*
-import io.ktor.client.request.forms.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
 /** 성적 상세·학기별 성적 요약 조회와 파싱을 담당합니다. */
 @OptIn(ExperimentalTime::class)
 internal class GradeService(
-    private val client: HttpClient,
     private val webDynpro: WebDynproService,
     private val cache: GradeCache,
 ) {
@@ -28,7 +22,20 @@ internal class GradeService(
             }
         }
 
-        val currentHtml = webDynpro.fetchHtml(URL, APP_NAME)
+        val (_, gradeTable) = loadGradeContextAndTable(year, semester)
+        if (year == null && semester == null) {
+            cache.latestYear = gradeTable.year
+            cache.latestSemester = gradeTable.semester
+        }
+        return gradeTable
+    }
+
+    private suspend fun loadGradeContextAndTable(
+        year: String?,
+        semester: Semester?,
+    ): Pair<WebDynproContext, GradeTable> {
+        var context = webDynpro.openSession(URL, APP_NAME)
+        val currentHtml = context.html
         if (cache.latestYear == null || cache.latestSemester == null) {
             val defaultYear = webDynpro.parseYear(currentHtml)
             val defaultSemester = webDynpro.parseSemester(currentHtml)
@@ -38,10 +45,6 @@ internal class GradeService(
             }
         }
 
-        val (secureId, formAction) = webDynpro.requireSession(
-            APP_NAME,
-            "성적 페이지 세션을 초기화하지 못했습니다.",
-        )
         val yearControlId = Regex(
             """<label\b[^>]*\bfor="([^"]+)"[^>]*>(?:(?!</?label\b).)*?학년도""",
             RegexOption.IGNORE_CASE,
@@ -86,31 +89,29 @@ internal class GradeService(
             listOf(buttonEvent, formRequest)
         }
 
-        val resultHtml = submitEvents(
-            secureId = secureId,
-            formAction = formAction,
+        context = webDynpro.submitEvents(
+            context = context,
             eventQueue = events.joinToString("~E001"),
         )
-        updateSession(resultHtml, secureId, formAction)
-
-        val gradeTable = parseGradeTable(resultHtml, year, semester)
-        if (year == null && semester == null) {
-            cache.latestYear = gradeTable.year
-            cache.latestSemester = gradeTable.semester
-        }
-        return gradeTable
+        return context to parseGradeTable(context.html, year, semester)
     }
 
     suspend fun getSemesterGradeSummaryTable(): SemesterGradeSummaryTable {
         val currentYear = Clock.System.now().toString().take(4).toInt()
-        getGradeTable(currentYear.minus(1).toString(), Semester.FIRST)
-
-        var initialHtml = webDynpro.fetchHtml(URL, APP_NAME)
+        var (context, _) = loadGradeContextAndTable(
+            currentYear.minus(1).toString(),
+            Semester.FIRST,
+        )
+        context = webDynpro.refreshSession(context)
+        var initialHtml = context.html
         var summaryTable = parseSemesterGradeSummaryTable(initialHtml)
         if (summaryTable.items.isEmpty()) {
-            webDynpro.removeSession(APP_NAME)
-            getGradeTable(currentYear.minus(1).toString(), Semester.FIRST)
-            initialHtml = webDynpro.fetchHtml(URL, APP_NAME)
+            val retry = loadGradeContextAndTable(
+                currentYear.minus(1).toString(),
+                Semester.FIRST,
+            )
+            context = webDynpro.refreshSession(retry.first)
+            initialHtml = context.html
             summaryTable = parseSemesterGradeSummaryTable(initialHtml)
         }
 
@@ -120,8 +121,8 @@ internal class GradeService(
 
         var firstVisibleRow = visibleRowCount
         repeat(20) {
-            val scrolledHtml = fetchTableRows(tableId, firstVisibleRow)
-            val scrolledTable = parseSemesterGradeSummaryTable(scrolledHtml)
+            context = fetchTableRows(context, tableId, firstVisibleRow)
+            val scrolledTable = parseSemesterGradeSummaryTable(context.html)
             if (scrolledTable.items.isEmpty()) return summaryTable
 
             val merged = mergeSemesterGradeSummaryTables(summaryTable, scrolledTable)
@@ -262,13 +263,10 @@ internal class GradeService(
     }
 
     private suspend fun fetchTableRows(
+        context: WebDynproContext,
         tableId: String,
         firstVisibleRow: Int,
-    ): String {
-        val (secureId, formAction) = webDynpro.requireSession(
-            APP_NAME,
-            "성적 페이지 세션을 초기화하지 못했습니다.",
-        )
+    ): WebDynproContext {
         val scrollEvent =
             "Table_VerticalScroll~E002Id~E004$tableId~E005FirstVisibleItemIndex" +
                 "~E004$firstVisibleRow~E005AccessType~E004SCROLLBAR~E003~E002ClientAction" +
@@ -278,64 +276,10 @@ internal class GradeService(
             "Form_Request~E002Id~E004sap.client.SsrClient.form~E005Async~E004false" +
                 "~E005FocusInfo~E004$focusInfo~E005Hash~E004~E005DomChanged~E004false" +
                 "~E005IsDirty~E004false~E003~E002ResponseData~E004delta~E003~E002~E003"
-        val responseHtml = submitEvents(
-            secureId = secureId,
-            formAction = formAction,
+        return webDynpro.submitEvents(
+            context = context,
             eventQueue = listOf(scrollEvent, formRequest).joinToString("~E001"),
         )
-        updateSession(responseHtml, secureId, formAction)
-        return responseHtml
-    }
-
-    private suspend fun submitEvents(
-        secureId: String,
-        formAction: String,
-        eventQueue: String,
-    ): String {
-        val actionUrl = if (formAction.startsWith("http")) {
-            formAction
-        } else {
-            "$ECC_BASE_URL$formAction"
-        }
-        val response = client.submitForm(
-            url = actionUrl,
-            formParameters = parameters {
-                append("sap-charset", "utf-8")
-                append("sap-wd-secure-id", secureId)
-                append("fesrAppName", APP_NAME)
-                append("fesrUseBeacon", "true")
-                append("SAPEVENTQUEUE", eventQueue)
-            },
-        ) {
-            headers {
-                append(HttpHeaders.UserAgent, USER_AGENT)
-                append(HttpHeaders.Accept, "*/*")
-                append("X-Requested-With", "XMLHttpRequest")
-                append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
-            }
-        }
-        return response.bodyAsText().decodeHtmlEntities().decodeHtmlEntities()
-    }
-
-    private fun updateSession(
-        html: String,
-        fallbackSecureId: String,
-        fallbackFormAction: String,
-    ) {
-        val secureId = Regex(
-            """name="sap-wd-secure-id"\s+value="([^"]+)"""",
-            RegexOption.IGNORE_CASE,
-        ).find(html)?.groupValues?.get(1) ?: fallbackSecureId
-        val formAction = Regex(
-            """<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""",
-            RegexOption.IGNORE_CASE,
-        ).find(html)
-            ?.groupValues
-            ?.get(1)
-            ?.decodeHtmlEntities()
-            ?.decodeHtmlEntities()
-            ?: fallbackFormAction
-        webDynpro.updateSession(APP_NAME, secureId, formAction)
     }
 
     private companion object {
@@ -347,8 +291,5 @@ internal class GradeService(
         const val DEFAULT_SEMESTER_CONTROL_ID =
             "ZCMW_PERIOD_RE.ID_0DC742680F42DA9747594D1AE51A0C69:VIW_MAIN.PERID"
         const val DEFAULT_SEARCH_BUTTON_ID = "ZCMB3W0017.ID_0001:VIW_MAIN.BTN_SEARCH"
-        const val USER_AGENT =
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
     }
 }

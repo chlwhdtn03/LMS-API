@@ -10,7 +10,7 @@ internal class GraduateTableService(
     private val webDynpro: WebDynproService,
 ) {
     suspend fun getGraduateTable(): GraduateTable {
-        return parseGraduateTable(webDynpro.fetchHtml(URL, APP_NAME))
+        return parseGraduateTable(webDynpro.openSession(URL, APP_NAME).html)
     }
 
     fun parseGraduateTable(html: String): GraduateTable {

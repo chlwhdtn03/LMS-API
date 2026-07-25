@@ -22,7 +22,8 @@
 - 기존 앱에서 사용하는 `LmsApi` 싱글톤과 로그인·조회 콜백 API는 그대로 유지됩니다.
 - JavaScript 지원과 관련 의존성은 제거되었습니다.
 - `parse*`, `merge*`, `find*`, `fetchWebDynproHtml` 같은 원본 응답 처리 함수는 내부 구현으로 변경되었습니다. 앱에서는 이 함수들을 직접 호출하지 말고 `get*` 조회 API를 사용해야 합니다.
-- `LmsApi`는 프로세스 내에서 로그인 세션, 토큰, 쿠키와 조회 캐시를 공유합니다. 새 로그인을 시작하면 이전 사용자의 세션과 캐시를 먼저 비우며, `logout`도 로그인 상태와 사용자별 캐시를 제거합니다.
+- `LmsApi`는 프로세스 내에서 로그인 세션, 토큰, 쿠키와 일부 최신 조회 조건을 공유합니다. 새 로그인을 시작하면 이전 사용자의 세션과 캐시를 먼저 비우며, `logout`도 로그인 상태와 사용자별 캐시를 제거합니다.
+- U-Saint Web Dynpro의 화면용 secure ID와 form action은 API 호출마다 새로 만들고 해당 호출 안에서만 사용합니다. 따라서 등록금과 장학금 등을 순서를 바꾸거나 반복 호출해도 이전 화면의 부분 응답이 다음 조회를 오염시키지 않습니다. 초기 화면이 일시적인 SAP 오류를 반환할 때는 로그인 쿠키를 유지한 채 최대 3회까지 다시 초기화하므로 별도 로그인이 필요하지 않습니다.
 - 로그인 및 LMS 조회(`getTerms`, `getTodoList`, `getSubjects` 등)는 외부에 콜백 API로 제공됩니다. U-Saint 조회 API는 Kotlin의 `suspend` 함수와 결과 콜백을 모두 제공합니다.
 - 기능별 구현은 `internal` 서비스로 분리되었지만 외부 사용법은 변경되지 않았습니다. 내부 구조와 기능 추가 규칙은 [내부 구현 가이드](library/src/commonMain/kotlin/io/github/chlwhdtn03/internal/README.md)를 참고하세요.
 
@@ -59,7 +60,7 @@ Android 또는 Kotlin Multiplatform(KMP) 프로젝트에서는 Gradle 의존성�
 **Android 단일 프로젝트 (`build.gradle.kts`):**
 ```kotlin
 dependencies {
-    implementation("io.github.chlwhdtn03:lms:1.6.0")
+    implementation("io.github.chlwhdtn03:lms:1.6.1")
 }
 ```
 
@@ -68,7 +69,7 @@ dependencies {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("io.github.chlwhdtn03:lms:1.6.0")
+            implementation("io.github.chlwhdtn03:lms:1.6.1")
         }
     }
 }
@@ -324,7 +325,7 @@ LMS 아이디와 비밀번호로 로그인합니다. 새 로그인 시도 전에
 ```kotlin
 fun logout(completion: () -> Unit)
 ```
-현재 로그인 상태와 쿠키, 사용자별 성적·시간표·채플 캐시를 제거합니다.
+현재 로그인 상태와 쿠키, 사용자별 성적·채플 최신 조회 조건 캐시를 제거합니다.
 
 #### `LmsApi.getTerms`
 ```kotlin

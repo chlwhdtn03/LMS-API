@@ -4,15 +4,9 @@ import io.github.chlwhdtn03.ChapelCache
 import io.github.chlwhdtn03.data.Lms.*
 import io.github.chlwhdtn03.decodeHtmlEntities
 import io.github.chlwhdtn03.stripHtmlTags
-import io.ktor.client.*
-import io.ktor.client.request.*
-import io.ktor.client.request.forms.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
 
 /** 채플 좌석·출결·결석계 조회와 파싱을 담당합니다. */
 internal class ChapelService(
-    private val client: HttpClient,
     private val webDynpro: WebDynproService,
     private val cache: ChapelCache,
 ) {
@@ -38,7 +32,8 @@ internal class ChapelService(
             }
         }
 
-        val currentHtml = webDynpro.fetchHtml(URL, APP_NAME)
+        var context = webDynpro.openSession(URL, APP_NAME)
+        val currentHtml = context.html
         if (cache.latestYear == null || cache.latestSemester == null) {
             val defaultYear = webDynpro.parseYear(currentHtml)
             val defaultSemester = webDynpro.parseSemester(currentHtml)
@@ -48,10 +43,6 @@ internal class ChapelService(
             }
         }
 
-        val (secureId, formAction) = webDynpro.requireSession(
-            APP_NAME,
-            "채플 페이지 세션을 초기화하지 못했습니다.",
-        )
         val yearControlId = Regex(
             """<label\b[^>]*\bfor="([^"]+)"[^>]*>(?:(?!</?label\b).)*?학년도""",
             RegexOption.IGNORE_CASE,
@@ -74,15 +65,9 @@ internal class ChapelService(
                 .find(currentHtml)?.groupValues?.get(1)
             ?: ""
 
-        if (yearControlId.isNotBlank()) cache.yearControlId = yearControlId
-        if (semesterControlId.isNotBlank()) cache.semesterControlId = semesterControlId
-        if (searchButtonId.isNotBlank()) cache.searchButtonId = searchButtonId
-
-        val activeYearControlId = yearControlId.ifBlank { cache.yearControlId.orEmpty() }
-        val activeSemesterControlId =
-            semesterControlId.ifBlank { cache.semesterControlId.orEmpty() }
-        val activeSearchButtonId =
-            searchButtonId.ifBlank { cache.searchButtonId ?: DEFAULT_SEARCH_BUTTON_ID }
+        val activeYearControlId = yearControlId
+        val activeSemesterControlId = semesterControlId
+        val activeSearchButtonId = searchButtonId.ifBlank { DEFAULT_SEARCH_BUTTON_ID }
 
         if (semester == Semester.SUMMER || semester == Semester.WINTER) {
             throw IllegalArgumentException("채플은 계절학기 조회를 지원하지 않습니다.")
@@ -115,14 +100,12 @@ internal class ChapelService(
             listOf(buttonEvent, formRequest)
         }
 
-        val resultHtml = submitEvents(
-            secureId = secureId,
-            formAction = formAction,
+        context = webDynpro.submitEvents(
+            context = context,
             eventQueue = events.joinToString("~E001"),
         )
-        updateSession(resultHtml, secureId, formAction)
 
-        val information = parseChapelInformation(resultHtml, year, semester)
+        val information = parseChapelInformation(context.html, year, semester)
         if (year == null && semester == null) {
             cache.latestYear = information.year
             cache.latestSemester = information.semester
@@ -301,57 +284,6 @@ internal class ChapelService(
         return RawTable(headers = allRows[0], rows = allRows.drop(1))
     }
 
-    private suspend fun submitEvents(
-        secureId: String,
-        formAction: String,
-        eventQueue: String,
-    ): String {
-        val actionUrl = if (formAction.startsWith("http")) {
-            formAction
-        } else {
-            "$ECC_BASE_URL$formAction"
-        }
-        val response = client.submitForm(
-            url = actionUrl,
-            formParameters = parameters {
-                append("sap-charset", "utf-8")
-                append("sap-wd-secure-id", secureId)
-                append("fesrAppName", APP_NAME)
-                append("fesrUseBeacon", "true")
-                append("SAPEVENTQUEUE", eventQueue)
-            },
-        ) {
-            headers {
-                append(HttpHeaders.UserAgent, USER_AGENT)
-                append(HttpHeaders.Accept, "*/*")
-                append("X-Requested-With", "XMLHttpRequest")
-                append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
-            }
-        }
-        return response.bodyAsText().decodeHtmlEntities().decodeHtmlEntities()
-    }
-
-    private fun updateSession(
-        html: String,
-        fallbackSecureId: String,
-        fallbackFormAction: String,
-    ) {
-        val secureId = Regex(
-            """name="sap-wd-secure-id"\s+value="([^"]+)"""",
-            RegexOption.IGNORE_CASE,
-        ).find(html)?.groupValues?.get(1) ?: fallbackSecureId
-        val formAction = Regex(
-            """<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""",
-            RegexOption.IGNORE_CASE,
-        ).find(html)
-            ?.groupValues
-            ?.get(1)
-            ?.decodeHtmlEntities()
-            ?.decodeHtmlEntities()
-            ?: fallbackFormAction
-        webDynpro.updateSession(APP_NAME, secureId, formAction)
-    }
-
     private data class RawTable(
         val headers: List<String>,
         val rows: List<List<String>>,
@@ -362,9 +294,6 @@ internal class ChapelService(
         const val ECC_BASE_URL = "https://ecc.ssu.ac.kr:8443"
         const val URL = "$ECC_BASE_URL/sap/bc/webdynpro/SAP/$APP_NAME"
         const val DEFAULT_SEARCH_BUTTON_ID = "WDB2"
-        const val USER_AGENT =
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
         val SEAT_STATUS_HEADERS =
             listOf("분반", "시간표", "강의실", "층수", "좌석번호", "결석일수", "설문조사", "성적", "비고")
         val ATTENDANCE_HEADERS =

@@ -10,7 +10,7 @@ internal class ScholarshipHistoryService(
     private val webDynpro: WebDynproService,
 ) {
     suspend fun getScholarshipHistoryTable(): ScholarshipHistoryTable {
-        return parseScholarshipHistoryTable(webDynpro.fetchHtml(URL, APP_NAME))
+        return parseScholarshipHistoryTable(webDynpro.openSession(URL, APP_NAME).html)
     }
 
     fun parseScholarshipHistoryTable(html: String): ScholarshipHistoryTable {
@@ -47,7 +47,7 @@ internal class ScholarshipHistoryService(
     }
 
     private companion object {
-        const val APP_NAME = "ZCMW7530n"
+        const val APP_NAME = "ZCMW7530N"
         const val URL = "https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/$APP_NAME"
     }
 }

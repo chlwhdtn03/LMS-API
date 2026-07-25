@@ -10,7 +10,7 @@ internal class TuitionTableService(
     private val webDynpro: WebDynproService,
 ) {
     suspend fun getTuitionTable(): TuitionTable {
-        return parseTuitionTable(webDynpro.fetchHtml(URL, APP_NAME))
+        return parseTuitionTable(webDynpro.openSession(URL, APP_NAME).html)
     }
 
     fun parseTuitionTable(html: String): TuitionTable {
@@ -42,7 +42,7 @@ internal class TuitionTableService(
     }
 
     private companion object {
-        const val APP_NAME = "ZCMW6520n"
+        const val APP_NAME = "ZCMW6520N"
         const val URL = "https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/$APP_NAME"
     }
 }

@@ -6,10 +6,8 @@ import io.github.chlwhdtn03.data.Lms.Term
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
-import kotlin.test.Test
-import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
-import kotlin.test.assertTrue
+import kotlin.random.Random
+import kotlin.test.*
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.ExperimentalTime
 
@@ -202,7 +200,7 @@ class LmsApiFullIntegrationTest {
         )
         assertNotNull(callbackGraduate.graduateTable)
 
-        LmsApi.getTuitionTable()
+        val tuition = LmsApi.getTuitionTable()
         val callbackTuition = awaitCallback<LmsTuitionResult> { LmsApi.getTuitionTable(it) }
         assertSuccess(
             "getTuitionTable(completion)",
@@ -211,7 +209,7 @@ class LmsApiFullIntegrationTest {
         )
         assertNotNull(callbackTuition.tuitionTable)
 
-        LmsApi.getScholarshipHistoryTable()
+        val scholarship = LmsApi.getScholarshipHistoryTable()
         val callbackScholarship = awaitCallback<LmsScholarshipHistoryResult> {
             LmsApi.getScholarshipHistoryTable(it)
         }
@@ -221,6 +219,11 @@ class LmsApiFullIntegrationTest {
             callbackScholarship.errorMessage,
         )
         assertNotNull(callbackScholarship.scholarshipHistoryTable)
+
+        testRepeatedFinancialHistoryCalls(
+            expectedTuitionCount = tuition.items.size,
+            expectedScholarshipCount = scholarship.items.size,
+        )
 
         LmsApi.getGradeTable()
         LmsApi.getGradeTable(period.year, period.semester)
@@ -274,6 +277,30 @@ class LmsApiFullIntegrationTest {
             callbackChapelByPeriod.errorMessage,
         )
         assertNotNull(callbackChapelByPeriod.chapelInformation)
+    }
+
+    private suspend fun testRepeatedFinancialHistoryCalls(
+        expectedTuitionCount: Int,
+        expectedScholarshipCount: Int,
+    ) {
+        val callOrder = List(6) { index -> index % 2 }
+            .shuffled(Random(REPEATED_CALL_SEED))
+
+        callOrder.forEachIndexed { index, target ->
+            when (target) {
+                0 -> assertEquals(
+                    expectedTuitionCount,
+                    LmsApi.getTuitionTable().items.size,
+                    "반복 호출 ${index + 1}회차에 등록금 조회 결과가 달라졌습니다.",
+                )
+
+                else -> assertEquals(
+                    expectedScholarshipCount,
+                    LmsApi.getScholarshipHistoryTable().items.size,
+                    "반복 호출 ${index + 1}회차에 장학금 조회 결과가 달라졌습니다.",
+                )
+            }
+        }
     }
 
     private suspend fun testCallbackLogoutAndSuspendLogin(credentials: Credentials) {
@@ -377,6 +404,7 @@ class LmsApiFullIntegrationTest {
 
     private companion object {
         val CALLBACK_TIMEOUT = 3.minutes
+        const val REPEATED_CALL_SEED = 75_306_520
         const val GRADUATE_TABLE_APP_NAME = "ZCMW8015"
         const val GRADUATE_TABLE_URL =
             "https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/$GRADUATE_TABLE_APP_NAME"

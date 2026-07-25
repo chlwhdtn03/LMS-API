@@ -89,17 +89,11 @@ internal class GradeCache {
 internal class ChapelCache {
     var latestYear: String? = null
     var latestSemester: Semester? = null
-    var yearControlId: String? = null
-    var semesterControlId: String? = null
-    var searchButtonId: String? = null
     var information: ChapelInformation? = null
 
     fun clear() {
         latestYear = null
         latestSemester = null
-        yearControlId = null
-        semesterControlId = null
-        searchButtonId = null
         information = null
     }
 }
@@ -116,7 +110,6 @@ object LmsApi {
         private set
     private var lmsId = ""
     private var apiBearerToken = ""
-    private val webDynproCache = mutableMapOf<String, Pair<String, String>>()
     private val gradeCache = GradeCache()
     private val chapelCache = ChapelCache()
     private val sessionMutex = Mutex()
@@ -137,13 +130,13 @@ object LmsApi {
         todoService = todoService,
         ensureLoggedIn = ::checkLoggedIn,
     )
-    private val webDynproService = WebDynproService(client, webDynproCache, ::checkLoggedIn)
-    private val timetableService = TimetableService(client, webDynproService)
+    private val webDynproService = WebDynproService(client, ::checkLoggedIn)
+    private val timetableService = TimetableService(webDynproService)
     private val graduateTableService = GraduateTableService(webDynproService)
     private val tuitionTableService = TuitionTableService(webDynproService)
     private val scholarshipHistoryService = ScholarshipHistoryService(webDynproService)
-    private val gradeService = GradeService(client, webDynproService, gradeCache)
-    private val chapelService = ChapelService(client, webDynproService, chapelCache)
+    private val gradeService = GradeService(webDynproService, gradeCache)
+    private val chapelService = ChapelService(webDynproService, chapelCache)
 
     internal data class UnsubmittedStats(
         val totalCount: Int = 0,
@@ -160,7 +153,6 @@ object LmsApi {
     }
 
     private fun clearCachedUserData() {
-        webDynproCache.clear()
         gradeCache.clear()
         chapelCache.clear()
     }

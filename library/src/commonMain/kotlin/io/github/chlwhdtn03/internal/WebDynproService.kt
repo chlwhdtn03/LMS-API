@@ -2,6 +2,7 @@ package io.github.chlwhdtn03.internal
 
 import io.github.chlwhdtn03.data.Lms.Semester
 import io.github.chlwhdtn03.decodeHtmlEntities
+import io.github.chlwhdtn03.stripHtmlTags
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.request.forms.*
@@ -9,95 +10,108 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 
 /**
- * SAP WebDynpro 세션 초기화와 이벤트 요청을 공통 처리합니다.
+ * 한 번의 Web Dynpro 조회 안에서만 사용하는 화면 세션입니다.
  *
- * 세션 캐시는 [LmsApi][io.github.chlwhdtn03.LmsApi]가 소유하며 이 클래스는 전달받은
- * 캐시를 사용하기만 합니다.
+ * 로그인 쿠키는 Ktor가 보관하지만, Web Dynpro의 secure ID와 form action은 각 화면
+ * 응답에서 직접 전달해야 합니다. 이 context는 전역으로 캐시하지 않고 호출이 끝나면
+ * 폐기합니다.
  */
+internal data class WebDynproContext(
+    val url: String,
+    val appName: String,
+    val html: String,
+    val secureId: String,
+    val formAction: String,
+)
+
+/** SAP Web Dynpro 화면 초기화와 이벤트 요청을 공통 처리합니다. */
 internal class WebDynproService(
     private val client: HttpClient,
-    private val sessionCache: MutableMap<String, Pair<String, String>>,
     private val ensureLoggedIn: () -> Unit,
 ) {
-    suspend fun fetchHtml(url: String, appName: String): String {
+    suspend fun openSession(url: String, appName: String): WebDynproContext {
         ensureLoggedIn()
 
-        val cached = sessionCache[appName]
-        if (cached != null) {
-            val (secureId, formAction) = cached
-            val cachedHtml = try {
-                postEventQueue(url, appName, secureId, formAction)
-            } catch (_: Exception) {
-                null
+        var lastFailure: WebDynproSessionException? = null
+        repeat(SESSION_OPEN_ATTEMPTS) {
+            try {
+                return openSessionOnce(url, appName)
+            } catch (failure: WebDynproSessionException) {
+                lastFailure = failure
             }
-            if (cachedHtml != null && isValidResponse(cachedHtml)) {
-                return cachedHtml
-            }
-            sessionCache.remove(appName)
         }
+        throw lastFailure
+            ?: IllegalStateException("$appName Web Dynpro 화면 세션을 초기화하지 못했습니다.")
+    }
 
+    private suspend fun openSessionOnce(url: String, appName: String): WebDynproContext {
         val response = client.get(url) {
             headers {
                 append(HttpHeaders.UserAgent, USER_AGENT)
                 append(HttpHeaders.Accept, HTML_ACCEPT)
             }
         }
-        val html = response.bodyAsText().decodeHtmlEntities().decodeHtmlEntities()
+        val initialHtml = response.bodyAsText().decodeResponse()
+        validateResponse(initialHtml, appName)
 
-        val secureId = Regex(
-            """name="sap-wd-secure-id"\s+value="([^"]+)"""",
-            RegexOption.IGNORE_CASE,
-        ).find(html)?.groupValues?.get(1).orEmpty()
-        val formAction = Regex(
-            """<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""",
-            RegexOption.IGNORE_CASE,
-        ).find(html)
-            ?.groupValues
-            ?.get(1)
-            ?.decodeHtmlEntities()
-            ?.decodeHtmlEntities()
-            .orEmpty()
-
-        if (secureId.isNotBlank() && formAction.isNotBlank()) {
-            sessionCache[appName] = secureId to formAction
-            try {
-                val eventHtml = postEventQueue(url, appName, secureId, formAction)
-                if (isValidResponse(eventHtml)) {
-                    val finalSecureId = Regex(
-                        """name="sap-wd-secure-id"\s+value="([^"]+)"""",
-                        RegexOption.IGNORE_CASE,
-                    ).find(eventHtml)?.groupValues?.get(1) ?: secureId
-                    val finalFormAction = Regex(
-                        """<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""",
-                        RegexOption.IGNORE_CASE,
-                    ).find(eventHtml)
-                        ?.groupValues
-                        ?.get(1)
-                        ?.decodeHtmlEntities()
-                        ?.decodeHtmlEntities()
-                        ?: formAction
-
-                    sessionCache[appName] = finalSecureId to finalFormAction
-                    return eventHtml
-                }
-            } catch (_: Exception) {
-                // 초기 이벤트가 실패해도 최초 HTML을 파싱할 수 있으므로 그대로 반환합니다.
-            }
+        val secureId = parseSecureId(initialHtml)
+        val formAction = parseFormAction(initialHtml)
+        if (secureId.isBlank() || formAction.isBlank()) {
+            throw WebDynproSessionException(
+                "$appName Web Dynpro 화면 세션을 초기화하지 못했습니다.",
+            )
         }
 
-        return html
+        val initialContext = WebDynproContext(
+            url = url,
+            appName = appName,
+            html = initialHtml,
+            secureId = secureId,
+            formAction = formAction,
+        )
+        return refreshSession(initialContext)
     }
 
-    fun requireSession(appName: String, errorMessage: String): Pair<String, String> {
-        return sessionCache[appName] ?: throw IllegalStateException(errorMessage)
+    suspend fun fetchHtml(url: String, appName: String): String {
+        return openSession(url, appName).html
     }
 
-    fun updateSession(appName: String, secureId: String, formAction: String) {
-        sessionCache[appName] = secureId to formAction
+    /**
+     * 현재 context에 초기 화면 이벤트를 다시 보냅니다.
+     *
+     * SAP가 `setFocus` 같은 부분 변경만 반환하면 기존 HTML을 유지합니다. 브라우저처럼
+     * DOM을 보관하지 않는 클라이언트가 부분 응답을 전체 페이지로 오인하지 않게 합니다.
+     */
+    suspend fun refreshSession(context: WebDynproContext): WebDynproContext {
+        val responseHtml = submitRaw(
+            context = context,
+            eventQueue = initialEventQueue(context.url),
+            extractCdata = true,
+        )
+        validateResponse(responseHtml, context.appName)
+        return if (isRenderablePage(responseHtml)) {
+            context.updatedWith(responseHtml)
+        } else if (containsTable(context.html)) {
+            context
+        } else {
+            throw WebDynproSessionException(
+                "${context.appName} Web Dynpro 조회 화면을 불러오지 못했습니다.",
+            )
+        }
     }
 
-    fun removeSession(appName: String) {
-        sessionCache.remove(appName)
+    suspend fun submitEvents(
+        context: WebDynproContext,
+        eventQueue: String,
+    ): WebDynproContext {
+        ensureLoggedIn()
+        val responseHtml = submitRaw(
+            context = context,
+            eventQueue = eventQueue,
+            extractCdata = false,
+        )
+        validateResponse(responseHtml, context.appName)
+        return context.updatedWith(responseHtml)
     }
 
     fun parseYear(html: String): String {
@@ -177,16 +191,103 @@ internal class WebDynproService(
         return result.toString()
     }
 
-    private fun isValidResponse(html: String): Boolean {
-        return !html.contains("로그온 준비 중입니다.") && !html.contains("sap-system-login")
+    private suspend fun submitRaw(
+        context: WebDynproContext,
+        eventQueue: String,
+        extractCdata: Boolean,
+    ): String {
+        val actionUrl = if (context.formAction.startsWith("http")) {
+            context.formAction
+        } else {
+            "$ECC_BASE_URL${context.formAction}"
+        }
+        val response = client.submitForm(
+            url = actionUrl,
+            formParameters = parameters {
+                append("sap-charset", "utf-8")
+                append("sap-wd-secure-id", context.secureId)
+                append("fesrAppName", context.appName)
+                append("fesrUseBeacon", "true")
+                append("SAPEVENTQUEUE", eventQueue)
+            },
+        ) {
+            headers {
+                append(HttpHeaders.UserAgent, USER_AGENT)
+                append(HttpHeaders.Accept, "*/*")
+                append("X-Requested-With", "XMLHttpRequest")
+                append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
+            }
+        }
+
+        val body = response.bodyAsText()
+        val content = if (extractCdata) {
+            Regex("""<!\[CDATA\[([\s\S]*?)]]>""")
+                .findAll(body)
+                .map { it.groupValues[1] }
+                .maxByOrNull { it.length }
+                ?: body
+        } else {
+            body
+        }
+        return content.decodeResponse()
     }
 
-    private suspend fun postEventQueue(
-        url: String,
-        appName: String,
-        secureId: String,
-        formAction: String,
-    ): String {
+    private fun WebDynproContext.updatedWith(responseHtml: String): WebDynproContext {
+        return copy(
+            html = responseHtml,
+            secureId = parseSecureId(responseHtml).ifBlank { secureId },
+            formAction = parseFormAction(responseHtml).ifBlank { formAction },
+        )
+    }
+
+    private fun parseSecureId(html: String): String {
+        return Regex(
+            """name="sap-wd-secure-id"\s+value="([^"]+)"""",
+            RegexOption.IGNORE_CASE,
+        ).find(html)?.groupValues?.get(1).orEmpty()
+    }
+
+    private fun parseFormAction(html: String): String {
+        return Regex(
+            """<form\s+[^>]*id="sap\.client\.SsrClient\.form"[^>]*action="([^"]+)"""",
+            RegexOption.IGNORE_CASE,
+        ).find(html)
+            ?.groupValues
+            ?.get(1)
+            ?.decodeHtmlEntities()
+            ?.decodeHtmlEntities()
+            .orEmpty()
+    }
+
+    private fun validateResponse(html: String, appName: String) {
+        val title = Regex(
+            """<title\b[^>]*>([\s\S]*?)</title>""",
+            RegexOption.IGNORE_CASE,
+        ).find(html)?.groupValues?.get(1)?.stripHtmlTags().orEmpty()
+        when {
+            title.contains("Application Server Error", ignoreCase = true) -> {
+                throw WebDynproSessionException("$appName Web Dynpro 서버 오류가 발생했습니다.")
+            }
+
+            html.contains("로그온 준비 중입니다.") ||
+                html.contains("sap-system-login", ignoreCase = true) -> {
+                throw IllegalStateException("$appName Web Dynpro 로그인 세션이 유효하지 않습니다.")
+            }
+        }
+    }
+
+    private fun isRenderablePage(html: String): Boolean {
+        if (html.isBlank()) return false
+        return containsTable(html) ||
+            html.contains("sap-wd-secure-id", ignoreCase = true) ||
+            html.contains("sap.client.SsrClient.form", ignoreCase = true)
+    }
+
+    private fun containsTable(html: String): Boolean {
+        return html.contains("<table", ignoreCase = true)
+    }
+
+    private fun initialEventQueue(url: String): String {
         val initialDataWd01 = "ClientWidth:1920px;ClientHeight:1000px;ScreenWidth:1920px;ScreenHeight:1080px;ScreenOrientation:landscape;ThemedTableRowHeight:33px;ThemedFormLayoutRowHeight:32px;ThemedSvgLibUrls:{\"SAPGUI-icons\":\"https://ecc.ssu.ac.kr:8443/sap/public/bc/ur/nw5/themes/~cache-20210223121230/Base/baseLib/sap_fiori_3/svg/libs/SAPGUI-icons.svg\",\"SAPWeb-icons\":\"https://ecc.ssu.ac.kr:8443/sap/public/bc/ur/nw5/themes/~cache-20210223121230/Base/baseLib/sap_fiori_3/svg/libs/SAPGUI-icons.svg\"};ThemeTags:Fiori_3,Touch;ThemeID:sap_fiori_3;SapThemeID:sap_fiori_3;DeviceType:DESKTOP"
         val e1 = "WD01_Notify~E002Id~E004WD01~E005Data~E004${escape(initialDataWd01)}~E003~E002ResponseData~E004delta~E005EnqueueCardinality~E004single~E003~E002~E003"
 
@@ -211,40 +312,15 @@ internal class WebDynproService(
         val e4 = "Custom_ClientInfos~E002${serializedClientInfo}~E003~E002ClientAction~E004enqueue~E005ResponseData~E004delta~E003~E002~E003"
 
         val e5 = "Form_Request~E002FocusInfo~E004~E005Id~E004sap.client.SsrClient.form~E005Async~E004false~E005Hash~E004~E005IsDirty~E004false~E005DomChanged~E004false~E003~E002~E003~E002~E003"
-        val eventQueue = listOf(e1, e2, e3, e4, e5).joinToString("~E001")
-        val actionUrl = if (formAction.startsWith("http")) {
-            formAction
-        } else {
-            "$ECC_BASE_URL$formAction"
-        }
+        return listOf(e1, e2, e3, e4, e5).joinToString("~E001")
+    }
 
-        val response = client.submitForm(
-            url = actionUrl,
-            formParameters = parameters {
-                append("sap-charset", "utf-8")
-                append("sap-wd-secure-id", secureId)
-                append("fesrAppName", appName)
-                append("fesrUseBeacon", "true")
-                append("SAPEVENTQUEUE", eventQueue)
-            },
-        ) {
-            headers {
-                append(HttpHeaders.UserAgent, USER_AGENT)
-                append(HttpHeaders.Accept, "*/*")
-                append("X-Requested-With", "XMLHttpRequest")
-                append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
-            }
-        }
-
-        val responseBody = response.bodyAsText()
-        return if (responseBody.contains("<![CDATA[")) {
-            responseBody.substringAfter("<![CDATA[").substringBefore("]]>")
-        } else {
-            responseBody
-        }
+    private fun String.decodeResponse(): String {
+        return decodeHtmlEntities().decodeHtmlEntities()
     }
 
     private companion object {
+        const val SESSION_OPEN_ATTEMPTS = 3
         const val ECC_BASE_URL = "https://ecc.ssu.ac.kr:8443"
         const val USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
@@ -254,3 +330,5 @@ internal class WebDynproService(
                 "image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
     }
 }
+
+private class WebDynproSessionException(message: String) : IllegalStateException(message)
