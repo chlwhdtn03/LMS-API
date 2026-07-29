@@ -191,6 +191,7 @@ internal class TodoService(
                 due_date = dueDate,
                 late_at = detail.late_at.orFallback(detail.lock_at.orEmpty()),
                 description = detail.description,
+                url = detail.html_url,
             )
         }
 
@@ -320,6 +321,7 @@ internal class TodoService(
                     due_date = contentData.due_at.orEmpty(),
                     late_at = contentData.late_at.orEmpty(),
                     description = contentData.description,
+                    url = contentData.item_content_data.view_url.orEmpty(),
                 )
             }
         }

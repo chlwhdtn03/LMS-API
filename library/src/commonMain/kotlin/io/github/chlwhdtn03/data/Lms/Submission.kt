@@ -82,6 +82,7 @@ data class Submission(
     val submission_type: String? = "",
     val workflow_state: String? = "",
     val score: Double? = Double.NEGATIVE_INFINITY,
+    val url: String? = "",
 ) {
     var name: String = "알 수 없음" // 과제 이름
     var groupName: String = "알 수 없음" // 과제 대분류명

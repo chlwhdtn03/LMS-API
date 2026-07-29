@@ -36,4 +36,5 @@ data class TodoDetailContentData(
 @Serializable
 data class TodoDetailItemContentData(
     val duration: Double? = null,
+    val view_url: String? = "",
 )
