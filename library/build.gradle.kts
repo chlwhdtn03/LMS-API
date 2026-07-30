@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "io.github.chlwhdtn03"
-version = "1.6.3"
+version = "1.6.3.1"
 
 val ktor_version: String by project
 
@@ -38,6 +38,7 @@ kotlin {
             }
         }
     }
+
     macosArm64()
     val iosArm64 = iosArm64()
 
@@ -91,7 +92,7 @@ kotlin {
 mavenPublishing {
     publishToMavenCentral()
 
-//    signAllPublications()
+    signAllPublications()
 
     coordinates(group.toString(), "lms", version.toString())
 
