@@ -106,6 +106,24 @@ class LmsApiParserSurfaceTest {
     }
 
     @Test
+    fun parsesPreRegistrationTable() {
+        val table = LmsApi.parsePreRegistrationTable(preRegistrationHtml())
+
+        assertEquals("2026학년도 2학기 예비수강신청(장바구니): 2026.08.03 ~ 2026.08.10", table.period)
+        assertEquals("예약 상태: 예약 완료", table.reservationStatus)
+        assertEquals("2", table.totalCourseCount)
+        assertEquals("6.0", table.totalCredits)
+        assertEquals("20", table.availableCredits)
+        assertEquals(2, table.items.size)
+        assertEquals("001", table.items[0].priority)
+        assertEquals("2150692501", table.items[0].subjectCode)
+        assertEquals("컴퓨터비전 (가)", table.items[0].subjectName)
+        assertEquals("화 목 15:00-16:15\n정보과학관 21101", table.items[0].schedule)
+        assertEquals("", table.items[0].section)
+        assertEquals("12", table.items[1].savedStudentCount)
+    }
+
+    @Test
     fun handlesPublicStringUtilities() {
         val pem = normalizePem(
             "-----BEGIN RSA PRIVATE KEY-----payload-----END RSA PRIVATE KEY-----",
@@ -190,6 +208,45 @@ class LmsApiParserSurfaceTest {
     }
 
     private fun summaryTableHtml(): String = "<table>${summaryRow()}</table>"
+
+    private fun preRegistrationHtml(): String {
+        val headers = listOf(
+            "우선순위", "계획", "이수구분", "다전공구분", "공학인증", "교과영역", "과목번호", "과목명",
+            "분반", "교수명", "시간/학점(설계)", "요일/시간(강의실)", "수강 신청일", "비고", "담은 인원", "취소",
+        ).joinToString(separator = "") { "<th>$it</th>" }
+        val firstRow = preRegistrationRow(
+            priority = "001",
+            values = listOf(
+                "", "전선-컴퓨터", "복선-컴퓨터", "", "", "2150692501", "컴퓨터비전 (가)", "",
+                "이제영", "3.00 / 3.0", "화 목 15:00-16:15<br>정보과학관 21101", "2026.08.04", "본인 신청", "17",
+            ),
+        )
+        val secondRow = preRegistrationRow(
+            priority = "002",
+            values = listOf(
+                "", "전필-컴퓨터", "복필-컴퓨터", "", "", "2150516203", "운영체제 (다)", "",
+                "홍지만", "3.00 / 3.0", "월 수 15:00-16:15", "2026.08.04", "본인 신청", "12",
+            ),
+        )
+        return """
+            <span>2026학년도 2학기 예비수강신청(장바구니): 2026.08.03 ~ 2026.08.10</span>
+            <div title="예약 상태: 예약 완료">예비수강 신청 내역</div>
+            <table ct="ST"><tr>$headers</tr>$firstRow$secondRow</table>
+            <table>
+                <tr><td><label for="TOTAL">총 신청 과목수</label><span id="TOTAL" ct="TV">2</span></td>
+                <td><span ct="TV">6.0</span></td>
+                <td><label for="AVAILABLE">수강가능학점</label><span id="AVAILABLE" ct="TV">20</span></td></tr>
+            </table>
+        """.trimIndent()
+    }
+
+    private fun preRegistrationRow(priority: String, values: List<String>): String {
+        val priorityCell = "<td><table><tr><td><input value=\"$priority\"></td></tr></table></td>"
+        return values.joinToString(
+            prefix = "<tr rr=\"1\">$priorityCell",
+            postfix = "<td><button>취소</button></td></tr>",
+        ) { "<td>$it</td>" }
+    }
 
     private fun summaryRow(): String {
         return tableRow(

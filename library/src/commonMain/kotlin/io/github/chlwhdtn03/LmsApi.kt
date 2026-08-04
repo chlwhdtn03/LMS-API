@@ -137,6 +137,7 @@ object LmsApi {
     private val scholarshipHistoryService = ScholarshipHistoryService(webDynproService)
     private val gradeService = GradeService(webDynproService, gradeCache)
     private val chapelService = ChapelService(webDynproService, chapelCache)
+    private val preRegistrationService = PreRegistrationService(webDynproService)
 
     internal data class UnsubmittedStats(
         val totalCount: Int = 0,
@@ -761,6 +762,41 @@ object LmsApi {
         defaultSemester: Semester? = null,
     ): ChapelInformation {
         return chapelService.parseChapelInformation(html, defaultYear, defaultSemester)
+    }
+
+    /**
+     * 유세인트 예비수강신청 장바구니 내역을 조회하여 가져옵니다.
+     *
+     * @return 예비수강신청 과목 및 신청 가능 학점 정보
+     */
+    @Throws(Exception::class)
+    suspend fun getPreRegistrationTable(): PreRegistrationTable {
+        checkLoggedIn()
+        return preRegistrationService.getPreRegistrationTable()
+    }
+
+    /**
+     * 유세인트 예비수강신청 장바구니 내역을 비동기 방식으로 조회하고 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param completion 결과 수신 콜백
+     */
+    fun getPreRegistrationTable(completion: (LmsPreRegistrationResult) -> Unit) {
+        apiScope.launch {
+            val result = try {
+                LmsPreRegistrationResult(
+                    success = true,
+                    preRegistrationTable = getPreRegistrationTable(),
+                )
+            } catch (throwable: Throwable) {
+                LmsPreRegistrationResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    @JvmSynthetic
+    internal fun parsePreRegistrationTable(html: String): PreRegistrationTable {
+        return preRegistrationService.parsePreRegistrationTable(html)
     }
 }
 

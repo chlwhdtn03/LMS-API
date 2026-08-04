@@ -60,7 +60,7 @@ Android 또는 Kotlin Multiplatform(KMP) 프로젝트에서는 Gradle 의존성�
 **Android 단일 프로젝트 (`build.gradle.kts`):**
 ```kotlin
 dependencies {
-    implementation("io.github.chlwhdtn03:lms:1.6.3.1")
+    implementation("io.github.chlwhdtn03:lms:1.6.4")
 }
 ```
 
@@ -69,7 +69,7 @@ dependencies {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("io.github.chlwhdtn03:lms:1.6.3.1")
+            implementation("io.github.chlwhdtn03:lms:1.6.4")
         }
     }
 }

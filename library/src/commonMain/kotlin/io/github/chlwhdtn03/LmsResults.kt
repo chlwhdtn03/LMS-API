@@ -89,5 +89,10 @@ data class LmsChapelResult(
     val errorMessage: String? = null,
 )
 
+data class LmsPreRegistrationResult(
+    val success: Boolean,
+    val preRegistrationTable: PreRegistrationTable? = null,
+    val errorMessage: String? = null,
+)
 
 

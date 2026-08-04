@@ -220,6 +220,17 @@ class LmsApiFullIntegrationTest {
         )
         assertNotNull(callbackScholarship.scholarshipHistoryTable)
 
+        LmsApi.getPreRegistrationTable()
+        val callbackPreRegistration = awaitCallback<LmsPreRegistrationResult> {
+            LmsApi.getPreRegistrationTable(it)
+        }
+        assertSuccess(
+            "getPreRegistrationTable(completion)",
+            callbackPreRegistration.success,
+            callbackPreRegistration.errorMessage,
+        )
+        assertNotNull(callbackPreRegistration.preRegistrationTable)
+
         testRepeatedFinancialHistoryCalls(
             expectedTuitionCount = tuition.items.size,
             expectedScholarshipCount = scholarship.items.size,
