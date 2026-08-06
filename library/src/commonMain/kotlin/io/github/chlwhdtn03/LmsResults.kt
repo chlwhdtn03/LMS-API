@@ -95,4 +95,21 @@ data class LmsPreRegistrationResult(
     val errorMessage: String? = null,
 )
 
+data class LmsCourseCatalogOptionsResult(
+    val success: Boolean,
+    val options: CourseCatalogSearchOptions? = null,
+    val errorMessage: String? = null,
+)
 
+data class LmsCourseCatalogResult(
+    val success: Boolean,
+    val courseCatalogTable: CourseCatalogTable? = null,
+    val errorMessage: String? = null,
+)
+
+/** 한 번만 접근할 수 있는 강의계획서 URL 발급 결과입니다. */
+data class LmsPlanResult(
+    val success: Boolean,
+    val plan: String = "",
+    val errorMessage: String? = null,
+)

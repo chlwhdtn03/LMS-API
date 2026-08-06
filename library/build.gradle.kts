@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "io.github.chlwhdtn03"
-version = "1.6.4"
+version = "1.6.5.1"
 
 val ktor_version: String by project
 
@@ -73,6 +73,7 @@ kotlin {
         }
 
         androidMain.dependencies {
+            implementation("androidx.webkit:webkit:1.16.0")
             implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
             implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
             implementation("io.ktor:ktor-client-cio:${ktor_version}")
@@ -92,7 +93,7 @@ kotlin {
 mavenPublishing {
     publishToMavenCentral()
 
-    signAllPublications()
+//    signAllPublications()
 
     coordinates(group.toString(), "lms", version.toString())
 

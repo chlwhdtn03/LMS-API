@@ -9,6 +9,7 @@ import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlin.jvm.JvmSynthetic
 import kotlin.random.Random
@@ -113,6 +114,7 @@ object LmsApi {
     private val gradeCache = GradeCache()
     private val chapelCache = ChapelCache()
     private val sessionMutex = Mutex()
+    private val planLoadMutex = Mutex()
     private val trackedTodoSnapshotDatesByDistinctId = mutableMapOf<String, String>()
 
     // 구현 클래스는 상태를 소유하지 않고 LmsApi가 전달한 캐시와 세션을 사용합니다.
@@ -138,6 +140,7 @@ object LmsApi {
     private val gradeService = GradeService(webDynproService, gradeCache)
     private val chapelService = ChapelService(webDynproService, chapelCache)
     private val preRegistrationService = PreRegistrationService(webDynproService)
+    private val courseCatalogService = CourseCatalogService(WebDynproService(client) {})
 
     internal data class UnsubmittedStats(
         val totalCount: Int = 0,
@@ -764,8 +767,72 @@ object LmsApi {
         return chapelService.parseChapelInformation(html, defaultYear, defaultSemester)
     }
 
+    @JvmSynthetic
+    internal suspend fun loadCourseCatalogPlan(course: CourseCatalogCourse): ByteArray {
+        val semester = requireNotNull(course.semester) {
+            "강의계획서를 조회할 학기 정보가 없습니다. 수강편람에서 받은 과목을 사용해 주세요."
+        }
+        require(course.year.matches(Regex("""\d{4}"""))) {
+            "강의계획서를 조회할 학년도 정보가 없습니다. 수강편람에서 받은 과목을 사용해 주세요."
+        }
+        return planLoadMutex.withLock {
+            val query = CourseCatalogQuery(
+                year = course.year,
+                semester = semester,
+                category = CourseCatalogCategory.SUBJECT,
+                keyword = course.subjectCode,
+            )
+            val viewerUrl = courseCatalogService.getPlanUrl(
+                query = query,
+                subjectCode = course.subjectCode,
+                section = course.section,
+            )
+            loadPlanPdf(viewerUrl)
+        }
+    }
+
+    @JvmSynthetic
+    internal suspend fun loadPreRegistrationPlan(course: PreRegistrationCourse): ByteArray {
+        checkLoggedIn()
+        return planLoadMutex.withLock {
+            val viewerUrl = preRegistrationService.getPlanUrl(
+                subjectCode = course.subjectCode,
+                section = course.section,
+            )
+            loadPlanPdf(viewerUrl)
+        }
+    }
+
+    private suspend fun loadPlanPdf(viewerUrl: String): ByteArray {
+        require(viewerUrl.isNotBlank()) { "이 과목에는 조회할 수 있는 강의계획서가 없습니다." }
+        val cookieUrls = listOf(
+            Url(viewerUrl),
+            Url("https://ecc.ssu.ac.kr:8443/"),
+            Url("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW2100"),
+            Url("https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/ZCMW2240"),
+        )
+        val cookies = cookieUrls.flatMap { cookieUrl ->
+            lmsCookiesStorage.get(cookieUrl).map { cookie -> cookieUrl to cookie }
+        }.distinctBy { (cookieUrl, cookie) ->
+            listOf(cookie.domain ?: cookieUrl.host, cookie.path ?: "/", cookie.name)
+        }.map { (cookieUrl, cookie) ->
+            OzPlanCookie(
+                name = cookie.name,
+                value = cookie.value,
+                domain = cookie.domain ?: cookieUrl.host,
+                path = cookie.path ?: "/",
+                secure = cookie.secure,
+                httpOnly = cookie.httpOnly,
+            )
+        }
+        return requirePdf(loadOzPlanPdf(viewerUrl, cookies))
+    }
+
     /**
      * 유세인트 예비수강신청 장바구니 내역을 조회하여 가져옵니다.
+     *
+     * 강의계획서 PDF는 목록 조회 중 만들지 않습니다. 사용자가 과목을 선택한 시점에
+     * 해당 [PreRegistrationCourse.loadPlan]을 호출합니다.
      *
      * @return 예비수강신청 과목 및 신청 가능 학점 정보
      */
@@ -794,10 +861,169 @@ object LmsApi {
         }
     }
 
+    /**
+     * 예비수강신청 장바구니의 과목 한 건에 대해 아직 접근하지 않은 계획서 URL을 발급합니다.
+     *
+     * 같은 과목번호가 여러 분반에 존재하면 [section]으로 구분할 수 있습니다. 빈 문자열을
+     * 전달하면 처음 일치하는 과목을 사용합니다. 반환된 주소는 서버 정책상 일회성이므로
+     * 발급 직후 열어야 하며, 다음 계획서 URL을 발급하면 기존 주소가 무효화될 수 있습니다.
+     */
+    @Deprecated(
+        message = "OZ Viewer URL은 다른 브라우저에서 재사용할 수 없습니다. 과목의 loadPlan()을 사용하세요.",
+    )
+    @Throws(Exception::class)
+    suspend fun getPreRegistrationPlanUrl(
+        subjectCode: String,
+        section: String = "",
+    ): String {
+        checkLoggedIn()
+        return preRegistrationService.getPlanUrl(subjectCode, section)
+    }
+
+    @Deprecated(
+        message = "OZ Viewer URL은 다른 브라우저에서 재사용할 수 없습니다. 과목의 loadPlan()을 사용하세요.",
+    )
+    @Suppress("DEPRECATION")
+    fun getPreRegistrationPlanUrl(
+        subjectCode: String,
+        section: String = "",
+        completion: (LmsPlanResult) -> Unit,
+    ) {
+        apiScope.launch {
+            val result = try {
+                LmsPlanResult(
+                    success = true,
+                    plan = getPreRegistrationPlanUrl(subjectCode, section),
+                )
+            } catch (throwable: Throwable) {
+                LmsPlanResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
     @JvmSynthetic
     internal fun parsePreRegistrationTable(html: String): PreRegistrationTable {
         return preRegistrationService.parsePreRegistrationTable(html)
     }
+
+    /**
+     * 수강편람 검색 화면에서 현재 선택 가능한 콤보박스 옵션을 가져옵니다.
+     *
+     * 상위 필터 선택에 따라 하위 옵션이 달라질 수 있으므로, 선택한 키는 [query]의
+     * `filterKeys`에 순서대로 넣어 다시 호출할 수 있습니다. 이 화면은 익명 접근이
+     * 가능하므로 LMS 로그인 없이도 사용할 수 있습니다.
+     */
+    @Throws(Exception::class)
+    suspend fun getCourseCatalogSearchOptions(
+        query: CourseCatalogQuery,
+    ): CourseCatalogSearchOptions {
+        return courseCatalogService.getSearchOptions(query)
+    }
+
+    fun getCourseCatalogSearchOptions(
+        query: CourseCatalogQuery,
+        completion: (LmsCourseCatalogOptionsResult) -> Unit,
+    ) {
+        apiScope.launch {
+            val result = try {
+                LmsCourseCatalogOptionsResult(
+                    success = true,
+                    options = getCourseCatalogSearchOptions(query),
+                )
+            } catch (throwable: Throwable) {
+                LmsCourseCatalogOptionsResult(
+                    success = false,
+                    errorMessage = throwable.toResultMessage(),
+                )
+            }
+            completion(result)
+        }
+    }
+
+    /**
+     * 수강편람을 검색하여 모든 페이지의 강좌를 반환합니다.
+     *
+     * 서버의 페이지당 줄수는 최대값인 500으로 설정하고, 결과가 여러 페이지거나
+     * 가상 스크롤로 나뉘면 모두 순회해 하나의 [CourseCatalogTable]로 합칩니다.
+     * 계획서 PDF는 목록 조회 중 만들지 않으며, 사용자가 강좌를 선택한 시점에 해당
+     * [CourseCatalogCourse.loadPlan]을 호출합니다.
+     */
+    @Throws(Exception::class)
+    suspend fun getCourseCatalogTable(query: CourseCatalogQuery): CourseCatalogTable {
+        return courseCatalogService.search(query)
+    }
+
+    fun getCourseCatalogTable(
+        query: CourseCatalogQuery,
+        completion: (LmsCourseCatalogResult) -> Unit,
+    ) {
+        apiScope.launch {
+            val result = try {
+                LmsCourseCatalogResult(
+                    success = true,
+                    courseCatalogTable = getCourseCatalogTable(query),
+                )
+            } catch (throwable: Throwable) {
+                LmsCourseCatalogResult(
+                    success = false,
+                    errorMessage = throwable.toResultMessage(),
+                )
+            }
+            completion(result)
+        }
+    }
+
+    /**
+     * 수강편람 강좌 한 건에 대해 아직 접근하지 않은 계획서 URL을 발급합니다.
+     *
+     * 목록을 조회할 때 사용한 [query]와 강좌의 과목번호·분반을 전달해야 합니다.
+     * [section]이 비어 있으면 처음 일치하는 강좌를 사용합니다. 반환된 URL에는 라이브러리가
+     * 접속하지 않으며, 서버 정책상 일회성이므로 발급 직후 열어야 합니다.
+     */
+    @Deprecated(
+        message = "OZ Viewer URL은 다른 브라우저에서 재사용할 수 없습니다. 과목의 loadPlan()을 사용하세요.",
+    )
+    @Throws(Exception::class)
+    suspend fun getCourseCatalogPlanUrl(
+        query: CourseCatalogQuery,
+        subjectCode: String,
+        section: String = "",
+    ): String {
+        return courseCatalogService.getPlanUrl(query, subjectCode, section)
+    }
+
+    @Deprecated(
+        message = "OZ Viewer URL은 다른 브라우저에서 재사용할 수 없습니다. 과목의 loadPlan()을 사용하세요.",
+    )
+    @Suppress("DEPRECATION")
+    fun getCourseCatalogPlanUrl(
+        query: CourseCatalogQuery,
+        subjectCode: String,
+        section: String = "",
+        completion: (LmsPlanResult) -> Unit,
+    ) {
+        apiScope.launch {
+            val result = try {
+                LmsPlanResult(
+                    success = true,
+                    plan = getCourseCatalogPlanUrl(query, subjectCode, section),
+                )
+            } catch (throwable: Throwable) {
+                LmsPlanResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    @JvmSynthetic
+    internal fun parseCourseCatalogTable(
+        html: String,
+        query: CourseCatalogQuery,
+    ): CourseCatalogTable {
+        return courseCatalogService.parseTable(html, query)
+    }
+
 }
 
 @JvmSynthetic

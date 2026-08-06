@@ -1,7 +1,10 @@
 package io.github.chlwhdtn03
 
+import io.github.chlwhdtn03.data.Lms.CourseCatalogCategory
+import io.github.chlwhdtn03.data.Lms.CourseCatalogQuery
 import io.github.chlwhdtn03.data.Lms.DayOfWeek
 import io.github.chlwhdtn03.data.Lms.Semester
+import io.github.chlwhdtn03.internal.WebDynproService
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -118,9 +121,80 @@ class LmsApiParserSurfaceTest {
         assertEquals("001", table.items[0].priority)
         assertEquals("2150692501", table.items[0].subjectCode)
         assertEquals("컴퓨터비전 (가)", table.items[0].subjectName)
+        assertEquals("https://ecc.ssu.ac.kr:8443/plan?id=1", table.items[0].plan)
         assertEquals("화 목 15:00-16:15\n정보과학관 21101", table.items[0].schedule)
         assertEquals("", table.items[0].section)
         assertEquals("12", table.items[1].savedStudentCount)
+    }
+
+    @Test
+    fun parsesCourseCatalogRowsAndPlanLinks() {
+        val query = CourseCatalogQuery(
+            year = "2026",
+            semester = Semester.FIRST,
+            category = CourseCatalogCategory.DEPARTMENT,
+        )
+        val regular = LmsApi.parseCourseCatalogTable(
+            courseCatalogHtml(
+                listOf(
+                    "<a href=\"https://ecc.ssu.ac.kr/plan?id=1&amp;lang=KO\">조회</a>",
+                    "전선-컴퓨터",
+                    "복선-컴퓨터",
+                    "공학주제",
+                    "2150168401",
+                    "컴퓨터비전",
+                    "가",
+                    "EL+",
+                    "01",
+                    "김교수",
+                    "AI소프트웨어학부",
+                    "3.0/3.0",
+                    "45",
+                    "3",
+                    "월 09:00-10:15",
+                    "학사과정",
+                ),
+                totalCount = 1,
+            ),
+            query,
+        )
+
+        assertEquals(1, regular.totalCourseCount)
+        assertEquals("2150168401", regular.items.single().subjectCode)
+        assertEquals("컴퓨터비전", regular.items.single().subjectName)
+        assertEquals("https://ecc.ssu.ac.kr/plan?id=1&lang=KO", regular.items.single().plan)
+        assertEquals("", regular.items.single().curriculumArea)
+
+        val general = LmsApi.parseCourseCatalogTable(
+            courseCatalogHtml(
+                listOf(
+                    "로그 조회",
+                    "교필",
+                    "",
+                    "",
+                    "인문",
+                    "2150000101",
+                    "현대인과성서",
+                    "",
+                    "",
+                    "01",
+                    "이교수",
+                    "베어드교양대학",
+                    "3.0/3.0",
+                    "100",
+                    "20",
+                    "화 10:30-11:45",
+                    "전체",
+                ),
+                totalCount = 1,
+            ),
+            query.copy(category = CourseCatalogCategory.REQUIRED_GENERAL),
+        )
+
+        assertEquals("인문", general.items.single().curriculumArea)
+        assertEquals("2150000101", general.items.single().subjectCode)
+        assertEquals("현대인과성서", general.items.single().subjectName)
+        assertEquals("", general.items.single().plan)
     }
 
     @Test
@@ -133,6 +207,20 @@ class LmsApiParserSurfaceTest {
 
         assertEquals("A & B", "&#x41; &amp; B".decodeHtmlEntities())
         assertEquals("첫 줄\n둘째 줄", "<p>첫 줄<br>둘째 줄</p>".stripHtmlTags())
+    }
+
+    @Test
+    fun parsesWebDynproExternalWindowUrl() {
+        val html = """
+            application.exec("openExternalWindow",{
+                "url":"https\x3a\x2f\x2foffice.ssu.ac.kr\x2foz70\x2fozView.jsp\x3fa\x3d1\x26b\x3d2"
+            });
+        """.trimIndent()
+
+        assertEquals(
+            listOf("https://office.ssu.ac.kr/oz70/ozView.jsp?a=1&b=2"),
+            WebDynproService(client) {}.parseExternalWindowUrls(html),
+        )
     }
 
     private fun timetableHtml(): String {
@@ -209,6 +297,19 @@ class LmsApiParserSurfaceTest {
 
     private fun summaryTableHtml(): String = "<table>${summaryRow()}</table>"
 
+    private fun courseCatalogHtml(values: List<String>, totalCount: Int): String {
+        val cells = values.mapIndexed { index, value -> "<td cc=\"$index\">$value</td>" }
+            .joinToString("")
+        return """
+            <table id="OTHER_TABLE" ct="ST"><tr>$cells</tr></table>
+            <span>총 ${totalCount}건</span>
+            <table id="COURSE_RESULT" ct="ST">
+                <tr><th>강의계획서 유무</th></tr>
+                <tr>$cells</tr>
+            </table>
+        """.trimIndent()
+    }
+
     private fun preRegistrationHtml(): String {
         val headers = listOf(
             "우선순위", "계획", "이수구분", "다전공구분", "공학인증", "교과영역", "과목번호", "과목명",
@@ -217,7 +318,7 @@ class LmsApiParserSurfaceTest {
         val firstRow = preRegistrationRow(
             priority = "001",
             values = listOf(
-                "", "전선-컴퓨터", "복선-컴퓨터", "", "", "2150692501", "컴퓨터비전 (가)", "",
+                "<a href=\"/plan?id=1\">조회</a>", "전선-컴퓨터", "복선-컴퓨터", "", "", "2150692501", "컴퓨터비전 (가)", "",
                 "이제영", "3.00 / 3.0", "화 목 15:00-16:15<br>정보과학관 21101", "2026.08.04", "본인 신청", "17",
             ),
         )

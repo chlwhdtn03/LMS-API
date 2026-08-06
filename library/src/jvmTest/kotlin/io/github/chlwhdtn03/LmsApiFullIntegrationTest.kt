@@ -1,8 +1,6 @@
 package io.github.chlwhdtn03
 
-import io.github.chlwhdtn03.data.Lms.Semester
-import io.github.chlwhdtn03.data.Lms.Subject
-import io.github.chlwhdtn03.data.Lms.Term
+import io.github.chlwhdtn03.data.Lms.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
@@ -220,7 +218,7 @@ class LmsApiFullIntegrationTest {
         )
         assertNotNull(callbackScholarship.scholarshipHistoryTable)
 
-        LmsApi.getPreRegistrationTable()
+        val preRegistration = LmsApi.getPreRegistrationTable()
         val callbackPreRegistration = awaitCallback<LmsPreRegistrationResult> {
             LmsApi.getPreRegistrationTable(it)
         }
@@ -230,6 +228,55 @@ class LmsApiFullIntegrationTest {
             callbackPreRegistration.errorMessage,
         )
         assertNotNull(callbackPreRegistration.preRegistrationTable)
+        preRegistration.items.firstOrNull()?.let { course ->
+            val plan = LmsApi.getPreRegistrationPlanUrl(course.subjectCode, course.section)
+            assertTrue(plan.startsWith("https://office.ssu.ac.kr/"))
+        }
+
+        val catalogQuery = CourseCatalogQuery(
+            year = period.year,
+            semester = period.semester,
+            category = CourseCatalogCategory.SUBJECT,
+            keyword = "컴퓨터",
+        )
+        val catalogOptions = LmsApi.getCourseCatalogSearchOptions(catalogQuery)
+        assertTrue(catalogOptions.acceptsKeyword)
+        val callbackCatalogOptions = awaitCallback<LmsCourseCatalogOptionsResult> {
+            LmsApi.getCourseCatalogSearchOptions(catalogQuery, it)
+        }
+        assertSuccess(
+            "getCourseCatalogSearchOptions(completion)",
+            callbackCatalogOptions.success,
+            callbackCatalogOptions.errorMessage,
+        )
+        assertNotNull(callbackCatalogOptions.options)
+
+        val catalog = LmsApi.getCourseCatalogTable(catalogQuery)
+        val callbackCatalog = awaitCallback<LmsCourseCatalogResult> {
+            LmsApi.getCourseCatalogTable(catalogQuery, it)
+        }
+        assertSuccess(
+            "getCourseCatalogTable(completion)",
+            callbackCatalog.success,
+            callbackCatalog.errorMessage,
+        )
+        assertNotNull(callbackCatalog.courseCatalogTable)
+        catalog.items.firstOrNull()?.let { course ->
+            val callbackPlan = awaitCallback<LmsPlanResult> { completion ->
+                LmsApi.getCourseCatalogPlanUrl(
+                    catalogQuery,
+                    course.subjectCode,
+                    course.section,
+                    completion,
+                )
+            }
+            assertSuccess(
+                "getCourseCatalogPlanUrl(completion)",
+                callbackPlan.success,
+                callbackPlan.errorMessage,
+            )
+            assertTrue(callbackPlan.plan.startsWith("https://office.ssu.ac.kr/"))
+        }
 
         testRepeatedFinancialHistoryCalls(
             expectedTuitionCount = tuition.items.size,

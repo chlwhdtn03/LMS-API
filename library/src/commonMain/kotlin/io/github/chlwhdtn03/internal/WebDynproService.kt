@@ -8,6 +8,7 @@ import io.ktor.client.request.*
 import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import kotlinx.coroutines.CancellationException
 
 /**
  * 한 번의 Web Dynpro 조회 안에서만 사용하는 화면 세션입니다.
@@ -22,6 +23,12 @@ internal data class WebDynproContext(
     val html: String,
     val secureId: String,
     val formAction: String,
+)
+
+/** 버튼 이벤트로 열린 외부 창 URL과 이어서 사용할 Web Dynpro 세션입니다. */
+internal data class WebDynproExternalUrls(
+    val context: WebDynproContext,
+    val urlsByButtonId: Map<String, String>,
 )
 
 /** SAP Web Dynpro 화면 초기화와 이벤트 요청을 공통 처리합니다. */
@@ -114,6 +121,64 @@ internal class WebDynproService(
         return context.updatedWith(responseHtml)
     }
 
+    /**
+     * 같은 화면의 버튼들을 눌러 `openExternalWindow`로 내려오는 URL을 추출합니다.
+     *
+     * 요청 수를 줄이기 위해 버튼을 묶어 전송하고, 응답 URL 수가 맞지 않으면 해당 묶음만
+     * 개별 요청으로 다시 확인합니다. 일부 버튼 요청이 실패해도 이미 찾은 URL은 유지합니다.
+     */
+    suspend fun resolveExternalWindowUrls(
+        initialContext: WebDynproContext,
+        buttonIds: List<String>,
+    ): WebDynproExternalUrls {
+        var context = initialContext
+        val urlsByButtonId = linkedMapOf<String, String>()
+        for (batch in buttonIds.distinct().chunked(EXTERNAL_URL_BUTTON_BATCH_SIZE)) {
+            val batchResponse = try {
+                submitEvents(
+                    context,
+                    buttonEventQueue(batch),
+                )
+            } catch (throwable: Throwable) {
+                if (throwable is CancellationException) throw throwable
+                break
+            }
+            context = batchResponse
+            val batchUrls = parseExternalWindowUrls(batchResponse.html)
+            if (batchUrls.size == batch.size) {
+                batch.zip(batchUrls).forEach { (buttonId, url) ->
+                    urlsByButtonId[buttonId] = url
+                }
+                continue
+            }
+
+            for (buttonId in batch) {
+                val response = try {
+                    submitEvents(context, buttonEventQueue(listOf(buttonId)))
+                } catch (throwable: Throwable) {
+                    if (throwable is CancellationException) throw throwable
+                    break
+                }
+                context = response
+                parseExternalWindowUrls(response.html).firstOrNull()?.let { url ->
+                    urlsByButtonId[buttonId] = url
+                }
+            }
+        }
+        return WebDynproExternalUrls(context, urlsByButtonId)
+    }
+
+    fun parseExternalWindowUrls(html: String): List<String> {
+        return Regex(
+            """["']url["']\s*:\s*["']([^"']+)["']""",
+            RegexOption.IGNORE_CASE,
+        ).findAll(html.decodeHtmlEntities()).map { match ->
+            match.groupValues[1].decodeJavascriptEscapes()
+        }.filter { url ->
+            url.startsWith("https://") || url.startsWith("http://")
+        }.toList()
+    }
+
     fun parseYear(html: String): String {
         val decodedHtml = html.decodeHtmlEntities()
         val labelRegex = Regex(
@@ -189,6 +254,29 @@ internal class WebDynproService(
             result.append(char.code.toString(16).uppercase().padStart(4, '0'))
         }
         return result.toString()
+    }
+
+    private fun buttonEventQueue(buttonIds: List<String>): String {
+        val events = buttonIds.map { buttonId ->
+            "Button_Press~E002Id~E004$buttonId~E003~E002ClientAction~E004submit" +
+                "~E005ResponseData~E004delta~E003~E002~E003"
+        }
+        val focusId = buttonIds.last()
+        val focusInfo = escape("""{"sFocussedId":"$focusId"}""")
+        val formRequest =
+            "Form_Request~E002Id~E004sap.client.SsrClient.form~E005Async~E004false" +
+                "~E005FocusInfo~E004$focusInfo~E005Hash~E004~E005DomChanged~E004false" +
+                "~E005IsDirty~E004false~E003~E002ResponseData~E004delta~E003~E002~E003"
+        return (events + formRequest).joinToString("~E001")
+    }
+
+    private fun String.decodeJavascriptEscapes(): String {
+        val unicodeDecoded = Regex("""\\u([0-9a-fA-F]{4})""").replace(this) { match ->
+            match.groupValues[1].toInt(16).toChar().toString()
+        }
+        return Regex("""\\x([0-9a-fA-F]{2})""").replace(unicodeDecoded) { match ->
+            match.groupValues[1].toInt(16).toChar().toString()
+        }.replace("\\/", "/")
     }
 
     private suspend fun submitRaw(
@@ -316,11 +404,60 @@ internal class WebDynproService(
     }
 
     private fun String.decodeResponse(): String {
-        return decodeHtmlEntities().decodeHtmlEntities()
+        if ('&' !in this) return this
+        return buildString(length) {
+            var index = 0
+            while (index < this@decodeResponse.length) {
+                if (this@decodeResponse[index] != '&') {
+                    append(this@decodeResponse[index++])
+                    continue
+                }
+
+                val first = this@decodeResponse.entityAt(index)
+                if (first == null) {
+                    append(this@decodeResponse[index++])
+                    continue
+                }
+
+                if (first.value == "&") {
+                    val nestedStart = first.endExclusive
+                    val nestedEnd = this@decodeResponse.indexOf(';', nestedStart)
+                    val nested = if (
+                        nestedEnd in nestedStart until minOf(
+                            this@decodeResponse.length,
+                            nestedStart + MAX_ENTITY_LENGTH,
+                        )
+                    ) {
+                        decodeEntityToken(
+                            this@decodeResponse.substring(nestedStart, nestedEnd),
+                        )
+                    } else {
+                        null
+                    }
+                    if (nested != null) {
+                        append(nested)
+                        index = nestedEnd + 1
+                        continue
+                    }
+                }
+
+                append(first.value)
+                index = first.endExclusive
+            }
+        }
+    }
+
+    private fun String.entityAt(startIndex: Int): DecodedEntity? {
+        val semicolon = indexOf(';', startIndex + 1)
+        if (semicolon < 0 || semicolon - startIndex > MAX_ENTITY_LENGTH) return null
+        val value = decodeEntityToken(substring(startIndex + 1, semicolon)) ?: return null
+        return DecodedEntity(value, semicolon + 1)
     }
 
     private companion object {
         const val SESSION_OPEN_ATTEMPTS = 3
+        const val EXTERNAL_URL_BUTTON_BATCH_SIZE = 20
+        const val MAX_ENTITY_LENGTH = 16
         const val ECC_BASE_URL = "https://ecc.ssu.ac.kr:8443"
         const val USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
@@ -328,6 +465,34 @@ internal class WebDynproService(
         const val HTML_ACCEPT =
             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp," +
                 "image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+    }
+}
+
+private data class DecodedEntity(
+    val value: String,
+    val endExclusive: Int,
+)
+
+private fun decodeEntityToken(token: String): String? {
+    if (token.startsWith("#")) {
+        val number = token.substring(1)
+        val codePoint = runCatching {
+            if (number.startsWith("x", ignoreCase = true)) {
+                number.substring(1).toInt(16)
+            } else {
+                number.toInt()
+            }
+        }.getOrNull() ?: return null
+        return codePoint.toChar().toString()
+    }
+    return when (token) {
+        "nbsp" -> " "
+        "lt" -> "<"
+        "gt" -> ">"
+        "amp" -> "&"
+        "quot" -> "\""
+        "apos" -> "'"
+        else -> null
     }
 }
 

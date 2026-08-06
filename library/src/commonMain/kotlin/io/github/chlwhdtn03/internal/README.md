@@ -35,6 +35,9 @@
 - `GraduateTableService`: 졸업사정표
 - `TuitionTableService`: 등록금 납부 이력
 - `ScholarshipHistoryService`: 장학 수혜 이력
+- `PreRegistrationService`: 예비수강신청 장바구니
+- `CourseCatalogService`: 익명 수강편람 필터와 전체 검색 결과
+- `OzPlanPdfLoader`: 과목의 `loadPlan()` 호출 시에만 플랫폼 WebView에서 OZ 보고서를 PDF 메모리 스트림으로 변환
 
 새 기능을 추가할 때는 같은 기능의 서비스에 요청·파싱 로직을 추가하고,
 `LmsApi`에는 기존 패턴과 같은 얇은 공개 조회 메서드만 추가한다. HTML 파서는 네트워크

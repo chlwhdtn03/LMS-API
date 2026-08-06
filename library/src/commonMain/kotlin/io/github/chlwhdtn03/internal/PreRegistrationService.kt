@@ -13,6 +13,22 @@ internal class PreRegistrationService(
         return parsePreRegistrationTable(webDynpro.openSession(URL, APP_NAME).html)
     }
 
+    /** 선택한 장바구니 과목 한 건의 계획 버튼만 눌러 일회성 URL을 반환합니다. */
+    suspend fun getPlanUrl(subjectCode: String, section: String): String {
+        require(subjectCode.isNotBlank()) { "과목번호는 비어 있을 수 없습니다." }
+
+        val context = webDynpro.openSession(URL, APP_NAME)
+        val row = parseRows(context.html).firstOrNull { candidate ->
+            candidate.course.subjectCode == subjectCode &&
+                (section.isBlank() || candidate.course.section == section)
+        } ?: return ""
+        if (row.course.plan.isNotBlank()) return row.course.plan
+        val buttonId = row.planButtonId ?: return ""
+        return webDynpro.resolveExternalWindowUrls(context, listOf(buttonId))
+            .urlsByButtonId[buttonId]
+            .orEmpty()
+    }
+
     fun parsePreRegistrationTable(html: String): PreRegistrationTable {
         val decodedHtml = html.decodeHtmlEntities()
         val tableHtml = findPreRegistrationTable(decodedHtml)
@@ -20,8 +36,7 @@ internal class PreRegistrationService(
             return PreRegistrationTable("", "", "", "", "", emptyList())
         }
 
-        val items = rowStarts(tableHtml)
-            .mapNotNull { rowStart -> parseCourse(tableHtml, rowStart) }
+        val items = parseRowsFromTable(tableHtml).map { it.course }
         val summaryValues = summaryValues(decodedHtml)
         return PreRegistrationTable(
             period = findPeriod(decodedHtml),
@@ -61,7 +76,19 @@ internal class PreRegistrationService(
             .toList()
     }
 
-    private fun parseCourse(tableHtml: String, rowStart: Int): PreRegistrationCourse? {
+    private fun parseRows(html: String): List<ParsedPreRegistrationCourse> {
+        val tableHtml = findPreRegistrationTable(html.decodeHtmlEntities()) ?: return emptyList()
+        return parseRowsFromTable(tableHtml)
+    }
+
+    private fun parseRowsFromTable(tableHtml: String): List<ParsedPreRegistrationCourse> {
+        return rowStarts(tableHtml).mapNotNull { rowStart -> parseCourse(tableHtml, rowStart) }
+    }
+
+    private fun parseCourse(
+        tableHtml: String,
+        rowStart: Int,
+    ): ParsedPreRegistrationCourse? {
         val rowEnd = findElementEnd(tableHtml, rowStart, "tr") ?: return null
         val cells = directElements(tableHtml.substring(rowStart, rowEnd), "td")
         if (cells.size != COURSE_COLUMN_COUNT) return null
@@ -77,23 +104,46 @@ internal class PreRegistrationService(
                 cell.stripHtmlTags()
             }
         }
-        return PreRegistrationCourse(
-            priority = values[0],
-            plan = values[1],
-            classification = values[2],
-            multiMajorClassification = values[3],
-            engineeringCertification = values[4],
-            curriculumArea = values[5],
-            subjectCode = values[6],
-            subjectName = values[7],
-            section = values[8],
-            professor = values[9],
-            hoursCredits = values[10],
-            schedule = values[11],
-            applicationDate = values[12],
-            note = values[13],
-            savedStudentCount = values[14],
+        return ParsedPreRegistrationCourse(
+            course = PreRegistrationCourse(
+                priority = values[0],
+                plan = extractNavigationUrl(cells[1]).orEmpty(),
+                classification = values[2],
+                multiMajorClassification = values[3],
+                engineeringCertification = values[4],
+                curriculumArea = values[5],
+                subjectCode = values[6],
+                subjectName = values[7],
+                section = values[8],
+                professor = values[9],
+                hoursCredits = values[10],
+                schedule = values[11],
+                applicationDate = values[12],
+                note = values[13],
+                savedStudentCount = values[14],
+            ),
+            planButtonId = findPlanButtonId(cells[1]),
         )
+    }
+
+    private fun findPlanButtonId(html: String): String? {
+        return Regex(
+            """<(?:div|button)\b(?=[^>]*\bid="([^"]+)")(?=[^>]*\bct="B")[^>]*>""",
+            RegexOption.IGNORE_CASE,
+        ).find(html)?.groupValues?.get(1)
+    }
+
+    private fun extractNavigationUrl(html: String): String? {
+        val href = Regex(
+            """<a\b[^>]*\bhref="([^"]+)""",
+            RegexOption.IGNORE_CASE,
+        ).find(html)?.groupValues?.get(1)?.decodeHtmlEntities()?.trim() ?: return null
+        return when {
+            href.startsWith("https://") || href.startsWith("http://") -> href
+            href.startsWith("//") -> "https:$href"
+            href.startsWith("/") -> "$ECC_ORIGIN$href"
+            else -> null
+        }
     }
 
     private fun findPeriod(html: String): String {
@@ -154,9 +204,15 @@ internal class PreRegistrationService(
         return null
     }
 
+    private data class ParsedPreRegistrationCourse(
+        val course: PreRegistrationCourse,
+        val planButtonId: String?,
+    )
+
     private companion object {
         const val APP_NAME = "ZCMW2240"
-        const val URL = "https://ecc.ssu.ac.kr:8443/sap/bc/webdynpro/SAP/$APP_NAME"
+        const val ECC_ORIGIN = "https://ecc.ssu.ac.kr:8443"
+        const val URL = "$ECC_ORIGIN/sap/bc/webdynpro/SAP/$APP_NAME"
         const val COURSE_COLUMN_COUNT = 16
     }
 }

@@ -1,6 +1,6 @@
 # LMS-API (SSU LMS & U-Saint Kotlin Multiplatform API)
 
-숭실대학교 LMS(Canvas, LearningX) 및 유세인트(U-Saint)의 학기, 강의, 할 일, 출석, 공지, 시간표, 성적, 채플, 등록금, 장학금, 졸업사정표 등의 정보를 조회하기 위한 Kotlin Multiplatform 라이브러리입니다.
+숭실대학교 LMS(Canvas, LearningX) 및 유세인트(U-Saint)의 학기, 강의, 할 일, 출석, 공지, 수강편람, 시간표, 성적, 채플, 등록금, 장학금, 졸업사정표 등의 정보를 조회하기 위한 Kotlin Multiplatform 라이브러리입니다.
 
 이 README는 **Swift Package Manager(SPM)**를 이용한 iOS 연동과 **Gradle**을 이용한 Android/Kotlin 연동을 기준으로 작성되었습니다.
 
@@ -60,7 +60,7 @@ Android 또는 Kotlin Multiplatform(KMP) 프로젝트에서는 Gradle 의존성�
 **Android 단일 프로젝트 (`build.gradle.kts`):**
 ```kotlin
 dependencies {
-    implementation("io.github.chlwhdtn03:lms:1.6.4")
+    implementation("io.github.chlwhdtn03:lms:1.6.5.1")
 }
 ```
 
@@ -69,7 +69,7 @@ dependencies {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("io.github.chlwhdtn03:lms:1.6.4")
+            implementation("io.github.chlwhdtn03:lms:1.6.5.1")
         }
     }
 }
@@ -79,7 +79,7 @@ kotlin {
 
 ## 기본 흐름 및 로그인 (Authentication)
 
-LMS 조회 기능과 유세인트(U-Saint) 조회 기능은 모두 **LMS 로그인 완료 후** 생성된 세션을 공유하여 호출할 수 있습니다. 로그인에 성공하면 학번 정보와 토큰 정보가 내부적으로 캐싱되어 이후 호출되는 API에 자동으로 적용됩니다.
+LMS 조회 기능과 대부분의 유세인트(U-Saint) 조회 기능은 **LMS 로그인 완료 후** 생성된 세션을 공유하여 호출할 수 있습니다. 로그인에 성공하면 학번 정보와 토큰 정보가 내부적으로 캐싱되어 이후 호출되는 API에 자동으로 적용됩니다. 공개 수강편람 조회는 예외로, 로그인 없이 사용할 수 있습니다.
 
 ### iOS (Swift) 로그인 예시
 ```swift
@@ -232,6 +232,118 @@ fun loadUSaintForAndroid() {
     }
 }
 ```
+
+### 수강편람 조회 (로그인 불필요)
+
+수강편람은 조회 유형별 콤보박스가 서로 연동되므로 먼저 옵션을 받고, 선택한 `key`를
+`filterKeys`에 같은 순서로 추가합니다. 검색 결과는 서버의 500줄 단위 페이지를 모두 합쳐
+반환합니다.
+
+```kotlin
+val baseQuery = CourseCatalogQuery(
+    year = "2026",
+    semester = Semester.FIRST,
+    category = CourseCatalogCategory.DEPARTMENT,
+)
+
+val collegeOptions = LmsApi.getCourseCatalogSearchOptions(baseQuery)
+val collegeKey = collegeOptions.filters[0].options.first().key
+
+val departmentOptions = LmsApi.getCourseCatalogSearchOptions(
+    baseQuery.copy(filterKeys = listOf(collegeKey)),
+)
+val departmentKey = departmentOptions.filters[1].options.first().key
+
+val courses = LmsApi.getCourseCatalogTable(
+    baseQuery.copy(filterKeys = listOf(collegeKey, departmentKey)),
+)
+
+// 목록 조회 단계에서는 OZ Viewer를 실행하지 않습니다.
+// 사용자가 특정 강좌의 계획 버튼을 누른 시점에만 PDF를 만듭니다.
+val selectedCourse = courses.items.first()
+val pdfBytes: ByteArray = selectedCourse.loadPlan()
+
+// 예비수강신청도 로그인 후 조회한 과목에서 동일하게 사용합니다.
+val preRegistration = LmsApi.getPreRegistrationTable()
+val preRegistrationPdf: ByteArray = preRegistration.items.first().loadPlan()
+```
+
+`CourseCatalogCategory.SUBJECT`와 `PROFESSOR`는 `keyword`를 사용합니다. 버튼형 계획서는
+재사용할 수 있는 링크가 아니므로 목록의 `plan`은 빈 문자열일 수 있습니다. Android와
+iOS에서는 과목의 `loadPlan()`을 호출하면 내부에서 일회성 OZ Viewer를 새로 열고 PDF가
+완성된 뒤 바이트를 반환합니다. 이 작업은 네트워크 요청과 보고서 렌더링을 포함하므로 UI
+로딩 상태를 표시하는 것이 좋습니다. PDF 크기와 생성 메모리를 줄이기 위해 폰트 임베딩은
+비활성화되어 있으므로, 특수 폰트가 사용된 계획서는 플랫폼의 대체 폰트로 표시될 수 있습니다.
+Android에서는 OZ 콜백의 전체 문자열을 Kotlin으로 넘기지 않고 WebView의 `ArrayBuffer`를
+`ByteArray`로 직접 수신합니다. JVM과 macOS에서는 PDF 로드를 지원하지 않습니다.
+
+iOS XCFramework에서는 `loadPlan(completionHandler:)`로 노출되며 결과 형식은
+`KotlinByteArray`입니다. Swift의 `Data`로 변환하면 Apple 기본 프레임워크인
+[`PDFKit`](https://developer.apple.com/documentation/pdfkit)의 `PDFDocument(data:)`와
+`PDFView`로 앱 내부 네이티브 PDF 뷰어를 구성할 수 있습니다. 별도의 외부 PDF 뷰어
+라이브러리는 필요하지 않습니다.
+
+```swift
+import LmsApi
+import PDFKit
+
+extension KotlinByteArray {
+    func toData() -> Data {
+        Data((0..<Int(size)).map { index in
+            UInt8(bitPattern: get(index: Int32(index)))
+        })
+    }
+}
+
+selectedCourse.loadPlan { bytes, error in
+    guard let bytes else {
+        print(error?.localizedDescription ?? "강의계획서 로드 실패")
+        return
+    }
+
+    let data = bytes.toData()
+    guard let document = PDFDocument(data: data) else {
+        print("올바른 PDF 데이터가 아닙니다.")
+        return
+    }
+
+    DispatchQueue.main.async {
+        pdfView.document = document
+        pdfView.autoScales = true
+        pdfView.displayMode = .singlePageContinuous
+    }
+}
+```
+
+SwiftUI에서는 `PDFView`를 `UIViewRepresentable`로 감싸서 사용할 수 있습니다.
+
+```swift
+import SwiftUI
+import PDFKit
+
+struct NativePDFView: UIViewRepresentable {
+    let data: Data
+
+    func makeUIView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        view.displayMode = .singlePageContinuous
+        view.displayDirection = .vertical
+        view.document = PDFDocument(data: data)
+        return view
+    }
+
+    func updateUIView(_ view: PDFView, context: Context) {
+        view.document = PDFDocument(data: data)
+    }
+}
+```
+
+`KotlinByteArray.toData()`는 Swift에서 각 바이트를 읽어 새 `Data`를 만드는 과정이므로 PDF가
+큰 경우 추가 복사 비용이 발생합니다. 변환 중에도 로딩 상태를 유지하고, 같은 PDF는 변환한
+`Data` 또는 임시 파일을 재사용하는 것이 좋습니다. 추후 iOS 전용 API가 `NSData`를 직접
+반환하도록 추가된다면 이 변환 단계는 생략할 수 있지만, 현재 공개 API의 반환 타입은
+`KotlinByteArray`입니다.
 
 ---
 
