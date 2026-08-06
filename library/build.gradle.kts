@@ -93,7 +93,7 @@ kotlin {
 mavenPublishing {
     publishToMavenCentral()
 
-//    signAllPublications()
+    signAllPublications()
 
     coordinates(group.toString(), "lms", version.toString())
 
