@@ -8,6 +8,8 @@ import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.http.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
@@ -29,11 +31,13 @@ internal class TodoService(
     private val trackedSnapshotDates: MutableMap<String, String>,
     private val ensureLoggedIn: () -> Unit,
 ) {
+    private val requestMutex = Mutex()
+
     suspend fun getTodoList(
         term: Term,
         loadingState: (Float) -> Unit = {},
         postHogDistinctId: String? = null,
-    ): List<Subject> {
+    ): List<Subject> = requestMutex.withLock {
         ensureLoggedIn()
 
         val lectures = courseClient.fetchLectures(term)
@@ -58,11 +62,19 @@ internal class TodoService(
             courseClient.fetchAndApplyAssignmentMetadata(lecture.id, submissions)
             val includeCommons = lecture.activities.mayHaveCommonsTodos()
 
-            val submissionTrackingItems = submissions.toSubmissionTrackingItems(
-                courseId = lecture.id,
-                now = now,
-            )
-            val submissionStats = submissionTrackingItems.toUnsubmittedStats()
+            val submissionTrackingItems = if (shouldTrackPostHog) {
+                submissions.toSubmissionTrackingItems(
+                    courseId = lecture.id,
+                    now = now,
+                )
+            } else {
+                emptyList()
+            }
+            val submissionStats = if (shouldTrackPostHog) {
+                submissionTrackingItems.toUnsubmittedStats()
+            } else {
+                submissions.toUnsubmittedStats(now)
+            }
             totalCount += submissionStats.totalCount
             unsubmittedCount += submissionStats.unsubmittedCount
             if (shouldTrackPostHog) {
@@ -124,91 +136,101 @@ internal class TodoService(
         term: Term,
         loadingState: (Float) -> Unit = {},
         postHogDistinctId: String? = null,
-    ): List<Subject> = withContext(Dispatchers.Default) {
-        ensureLoggedIn()
+    ): List<Subject> = requestMutex.withLock {
+        withContext(Dispatchers.Default) {
+            ensureLoggedIn()
 
-        val lecturesDeferred = async { courseClient.fetchLectures(term) }
-        val learnStatusesDeferred = async { courseClient.fetchLearnStatuses(term) }
-        val lectures = lecturesDeferred.await()
-        val initialRequests = lectures.map { lecture ->
-            prefetchCourseRequests(courseClient, lecture)
-        }
-        val learnStatusByCourseId = learnStatusesDeferred.await()
-            .learnstatuses
-            .associateFirstById { it.course.id }
+            val lecturesDeferred = async { courseClient.fetchLectures(term) }
+            val learnStatusesDeferred = async { courseClient.fetchLearnStatuses(term) }
+            val lectures = lecturesDeferred.await()
+            val initialRequests = lectures.map { lecture ->
+                prefetchCourseRequests(courseClient, lecture)
+            }
+            val learnStatusByCourseId = learnStatusesDeferred.await()
+                .learnstatuses
+                .associateFirstById { it.course.id }
 
-        loadingState(0.3f)
-        val weight = if (lectures.isEmpty()) 0f else 0.7f / lectures.size
-        val now = Clock.System.now()
-        val shouldTrackPostHog = !postHogDistinctId.isNullOrBlank()
-        val courseResults = initialRequests.map { initial ->
-            async {
-                val lecture = initial.lecture
-                val (submissions, permissionFailed) = initial.submissions.await()
-                courseClient.applyAssignmentMetadata(submissions, initial.metadata.await())
-                val includeCommons = lecture.activities.mayHaveCommonsTodos()
-                val submissionTrackingItems = submissions.toSubmissionTrackingItems(
-                    courseId = lecture.id,
-                    now = now,
-                )
-                val submissionStats = submissionTrackingItems.toUnsubmittedStats()
-                val includeSubject =
-                    lecture.activities.mayHaveTodoAssignments() || includeCommons || submissions.isNotEmpty()
-                val todoResult = if (!includeSubject) {
-                    TodoBuildResult(todoList = emptyList())
-                } else {
-                    buildCourseTodoParallel(
-                        courseId = lecture.id,
-                        submissions = submissions,
-                        includeCommons = includeCommons,
-                        includeCommonsForTracking = shouldTrackPostHog,
-                        todoDetails = initial.todoDetails.await(),
-                    )
-                }
+            loadingState(0.3f)
+            val weight = if (lectures.isEmpty()) 0f else 0.7f / lectures.size
+            val now = Clock.System.now()
+            val shouldTrackPostHog = !postHogDistinctId.isNullOrBlank()
+            val courseResults = initialRequests.map { initial ->
+                async {
+                    val lecture = initial.lecture
+                    val (submissions, permissionFailed) = initial.submissions.await()
+                    courseClient.applyAssignmentMetadata(submissions, initial.metadata.await())
+                    val includeCommons = lecture.activities.mayHaveCommonsTodos()
+                    val submissionTrackingItems = if (shouldTrackPostHog) {
+                        submissions.toSubmissionTrackingItems(
+                            courseId = lecture.id,
+                            now = now,
+                        )
+                    } else {
+                        emptyList()
+                    }
+                    val submissionStats = if (shouldTrackPostHog) {
+                        submissionTrackingItems.toUnsubmittedStats()
+                    } else {
+                        submissions.toUnsubmittedStats(now)
+                    }
+                    val includeSubject =
+                        lecture.activities.mayHaveTodoAssignments() || includeCommons || submissions.isNotEmpty()
+                    val todoResult = if (!includeSubject) {
+                        TodoBuildResult(todoList = emptyList())
+                    } else {
+                        buildCourseTodoParallel(
+                            courseId = lecture.id,
+                            submissions = submissions,
+                            includeCommons = includeCommons,
+                            includeCommonsForTracking = shouldTrackPostHog,
+                            todoDetails = initial.todoDetails.await(),
+                        )
+                    }
 
-                ParallelTodoCourseResult(
-                    subject = if (includeSubject) Subject(
-                        id = lecture.id,
-                        termId = lecture.term_id,
-                        termName = term.name ?: "학기정보 없음",
-                        name = lecture.name,
-                        professor = lecture.professors,
-                        totalStudents = lecture.total_students,
-                        todoList = todoResult.todoList,
-                        attendances = learnStatusByCourseId[lecture.id]
-                            .toAttendances(permissionFailed),
-                        discussions = if (includeSubject && !permissionFailed) {
-                            initial.discussions.await().getOrThrow()
+                    ParallelTodoCourseResult(
+                        subject = if (includeSubject) Subject(
+                            id = lecture.id,
+                            termId = lecture.term_id,
+                            termName = term.name ?: "학기정보 없음",
+                            name = lecture.name,
+                            professor = lecture.professors,
+                            totalStudents = lecture.total_students,
+                            todoList = todoResult.todoList,
+                            attendances = learnStatusByCourseId[lecture.id]
+                                .toAttendances(permissionFailed),
+                            discussions = if (includeSubject && !permissionFailed) {
+                                initial.discussions.await().getOrThrow()
+                            } else {
+                                emptyList()
+                            },
+                            submissions = submissions + todoResult.completedCommonsSubmissions,
+                            scoredAssignments = emptyList(),
+                            permissionFailed = permissionFailed,
+                        ) else null,
+                        stats = LmsApi.UnsubmittedStats(
+                            totalCount = submissionStats.totalCount + todoResult.commonsStats.totalCount,
+                            unsubmittedCount = submissionStats.unsubmittedCount + todoResult.commonsStats.unsubmittedCount,
+                        ),
+                        trackingItems = if (shouldTrackPostHog) {
+                            submissionTrackingItems + todoResult.commonsTrackingItems
                         } else {
                             emptyList()
                         },
-                        submissions = submissions + todoResult.completedCommonsSubmissions,
-                        scoredAssignments = emptyList(),
-                        permissionFailed = permissionFailed,
-                    ) else null,
-                    stats = LmsApi.UnsubmittedStats(
-                        totalCount = submissionStats.totalCount + todoResult.commonsStats.totalCount,
-                        unsubmittedCount = submissionStats.unsubmittedCount + todoResult.commonsStats.unsubmittedCount,
-                    ),
-                    trackingItems = if (shouldTrackPostHog) {
-                        submissionTrackingItems + todoResult.commonsTrackingItems
-                    } else {
-                        emptyList()
-                    },
-                )
-            }
-        }.awaitAll()
+                    )
+                }
+            }.awaitAll()
 
-        trackTodoSync(
-            stats = LmsApi.UnsubmittedStats(
-                totalCount = courseResults.sumOf { it.stats.totalCount },
-                unsubmittedCount = courseResults.sumOf { it.stats.unsubmittedCount },
-            ),
-            items = courseResults.flatMap { it.trackingItems },
-            postHogDistinctId = postHogDistinctId,
-        )
-        courseResults.indices.forEach { index -> loadingState(0.3f + weight * (index + 1)) }
-        courseResults.mapNotNull { it.subject }
+            trackTodoSync(
+                stats = LmsApi.UnsubmittedStats(
+                    totalCount = courseResults.sumOf { it.stats.totalCount },
+                    unsubmittedCount = courseResults.sumOf { it.stats.unsubmittedCount },
+                ),
+                items = courseResults.flatMap { it.trackingItems },
+                postHogDistinctId = postHogDistinctId,
+            )
+            courseResults.indices.forEach { index -> loadingState(0.3f + weight * (index + 1)) }
+            courseResults.mapNotNull { it.subject }
+        }
     }
 
     suspend fun getUnsubmittedRatioStats(
@@ -291,8 +313,16 @@ internal class TodoService(
 
         if (includeCommons || includeCommonsForTracking) {
             val todoDetails = courseClient.fetchTodoDetails(courseId)
-            commonsTrackingItems = todoDetails.toCommonsTrackingItems(courseId, now)
-            commonsStats = commonsTrackingItems.toUnsubmittedStats()
+            commonsTrackingItems = if (includeCommonsForTracking) {
+                todoDetails.toCommonsTrackingItems(courseId, now)
+            } else {
+                emptyList()
+            }
+            commonsStats = if (includeCommonsForTracking) {
+                commonsTrackingItems.toUnsubmittedStats()
+            } else {
+                todoDetails.toCommonsUnsubmittedStats(now)
+            }
             completedCommonsSubmissions = todoDetails.toCompletedCommonsSubmissions()
             if (includeCommons) {
                 todoList += todoDetails.toCommonsTodoList(now)
@@ -350,14 +380,22 @@ internal class TodoService(
         } else {
             emptyList()
         }
-        val commonsTrackingItems = relevantTodoDetails.toCommonsTrackingItems(courseId, now)
+        val commonsTrackingItems = if (includeCommonsForTracking) {
+            relevantTodoDetails.toCommonsTrackingItems(courseId, now)
+        } else {
+            emptyList()
+        }
         if (includeCommons) {
             todoList += relevantTodoDetails.toCommonsTodoList(now)
         }
 
         TodoBuildResult(
             todoList = todoList.sortedBy { it.due_date },
-            commonsStats = commonsTrackingItems.toUnsubmittedStats(),
+            commonsStats = if (includeCommonsForTracking) {
+                commonsTrackingItems.toUnsubmittedStats()
+            } else {
+                relevantTodoDetails.toCommonsUnsubmittedStats(now)
+            },
             commonsTrackingItems = commonsTrackingItems,
             completedCommonsSubmissions = relevantTodoDetails.toCompletedCommonsSubmissions(),
         )
@@ -481,7 +519,29 @@ internal class TodoService(
     private fun List<TodoDetail>.toCommonsUnsubmittedStats(
         now: Instant,
     ): LmsApi.UnsubmittedStats {
-        return toCommonsTrackingItems(courseId = 0, now = now).toUnsubmittedStats()
+        val seenItemIds = mutableSetOf<Int>()
+        var totalCount = 0
+        var unsubmittedCount = 0
+        for (module in this) {
+            for (item in module.module_items.orEmpty()) {
+                val contentData = item.content_data ?: continue
+                if (contentData.item_content_type != "commons") continue
+                if (contentData.item_content_data?.duration == null) continue
+                if (contentData.use_attendance == false) continue
+
+                val itemId = contentData.item_id?.takeIf { it > 0 }
+                    ?: item.content_id?.takeIf { it > 0 }
+                    ?: item.module_item_id?.takeIf { it > 0 }
+                    ?: continue
+                if (!seenItemIds.add(itemId)) continue
+
+                totalCount += 1
+                if (item.completed != true && contentData.due_at.isPastOrCurrentInstant(now)) {
+                    unsubmittedCount += 1
+                }
+            }
+        }
+        return LmsApi.UnsubmittedStats(totalCount, unsubmittedCount)
     }
 
     private fun List<TodoDetail>.toCommonsTrackingItems(
