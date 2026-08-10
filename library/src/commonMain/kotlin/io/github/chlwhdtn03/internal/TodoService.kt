@@ -7,8 +7,7 @@ import io.github.chlwhdtn03.shouldSendTodoSnapshot
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.http.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
@@ -117,6 +116,101 @@ internal class TodoService(
         return subjects
     }
 
+    /**
+     * 로그인 이후 과목별 Todo 요청을 병렬로 수행하는 [getTodoList]의 비교용 경로입니다.
+     * 출석과 공지까지 포함하며, 반환 순서는 LMS의 수강 과목 순서를 유지합니다.
+     */
+    suspend fun getTodoListParallel(
+        term: Term,
+        loadingState: (Float) -> Unit = {},
+        postHogDistinctId: String? = null,
+    ): List<Subject> = withContext(Dispatchers.Default) {
+        ensureLoggedIn()
+
+        val lecturesDeferred = async { courseClient.fetchLectures(term) }
+        val learnStatusesDeferred = async { courseClient.fetchLearnStatuses(term) }
+        val lectures = lecturesDeferred.await()
+        val initialRequests = lectures.map { lecture ->
+            prefetchCourseRequests(courseClient, lecture)
+        }
+        val learnStatusByCourseId = learnStatusesDeferred.await()
+            .learnstatuses
+            .associateFirstById { it.course.id }
+
+        loadingState(0.3f)
+        val weight = if (lectures.isEmpty()) 0f else 0.7f / lectures.size
+        val now = Clock.System.now()
+        val shouldTrackPostHog = !postHogDistinctId.isNullOrBlank()
+        val courseResults = initialRequests.map { initial ->
+            async {
+                val lecture = initial.lecture
+                val (submissions, permissionFailed) = initial.submissions.await()
+                courseClient.applyAssignmentMetadata(submissions, initial.metadata.await())
+                val includeCommons = lecture.activities.mayHaveCommonsTodos()
+                val submissionTrackingItems = submissions.toSubmissionTrackingItems(
+                    courseId = lecture.id,
+                    now = now,
+                )
+                val submissionStats = submissionTrackingItems.toUnsubmittedStats()
+                val includeSubject =
+                    lecture.activities.mayHaveTodoAssignments() || includeCommons || submissions.isNotEmpty()
+                val todoResult = if (!includeSubject) {
+                    TodoBuildResult(todoList = emptyList())
+                } else {
+                    buildCourseTodoParallel(
+                        courseId = lecture.id,
+                        submissions = submissions,
+                        includeCommons = includeCommons,
+                        includeCommonsForTracking = shouldTrackPostHog,
+                        todoDetails = initial.todoDetails.await(),
+                    )
+                }
+
+                ParallelTodoCourseResult(
+                    subject = if (includeSubject) Subject(
+                        id = lecture.id,
+                        termId = lecture.term_id,
+                        termName = term.name ?: "학기정보 없음",
+                        name = lecture.name,
+                        professor = lecture.professors,
+                        totalStudents = lecture.total_students,
+                        todoList = todoResult.todoList,
+                        attendances = learnStatusByCourseId[lecture.id]
+                            .toAttendances(permissionFailed),
+                        discussions = if (includeSubject && !permissionFailed) {
+                            initial.discussions.await().getOrThrow()
+                        } else {
+                            emptyList()
+                        },
+                        submissions = submissions + todoResult.completedCommonsSubmissions,
+                        scoredAssignments = emptyList(),
+                        permissionFailed = permissionFailed,
+                    ) else null,
+                    stats = LmsApi.UnsubmittedStats(
+                        totalCount = submissionStats.totalCount + todoResult.commonsStats.totalCount,
+                        unsubmittedCount = submissionStats.unsubmittedCount + todoResult.commonsStats.unsubmittedCount,
+                    ),
+                    trackingItems = if (shouldTrackPostHog) {
+                        submissionTrackingItems + todoResult.commonsTrackingItems
+                    } else {
+                        emptyList()
+                    },
+                )
+            }
+        }.awaitAll()
+
+        trackTodoSync(
+            stats = LmsApi.UnsubmittedStats(
+                totalCount = courseResults.sumOf { it.stats.totalCount },
+                unsubmittedCount = courseResults.sumOf { it.stats.unsubmittedCount },
+            ),
+            items = courseResults.flatMap { it.trackingItems },
+            postHogDistinctId = postHogDistinctId,
+        )
+        courseResults.indices.forEach { index -> loadingState(0.3f + weight * (index + 1)) }
+        courseResults.mapNotNull { it.subject }
+    }
+
     suspend fun getUnsubmittedRatioStats(
         term: Term,
         loadingState: (Float) -> Unit = {},
@@ -210,6 +304,62 @@ internal class TodoService(
             commonsStats = commonsStats,
             commonsTrackingItems = commonsTrackingItems,
             completedCommonsSubmissions = completedCommonsSubmissions,
+        )
+    }
+
+    suspend fun buildCourseTodoParallel(
+        courseId: Int,
+        submissions: List<Submission>,
+        includeCommons: Boolean,
+        includeCommonsForTracking: Boolean = false,
+        todoDetails: List<TodoDetail>,
+    ): TodoBuildResult = coroutineScope {
+        val now = Clock.System.now()
+        val assignmentRequests = submissions
+            .asSequence()
+            .filter { it.assignment_id?.takeIf { id -> id > 0 } != null }
+            .distinctBy { it.assignment_id }
+            .filterNot { it.isCompletedForTodo() || !it.cached_due_date.isFutureInstant(now) }
+            .map { submission ->
+                async {
+                    val assignmentId = requireNotNull(submission.assignment_id)
+                    val detail = courseClient.fetchAssignmentDetail(courseId, assignmentId)
+                    TodoList(
+                        section_id = 0,
+                        unit_id = 0,
+                        component_id = 0,
+                        generated_from_lecture_content = false,
+                        component_type = when (detail.submission_types?.first().orEmpty()) {
+                            "online_quiz" -> "quiz"
+                            else -> "assignment"
+                        },
+                        assignment_id = assignmentId,
+                        title = detail.name.orFallback(submission.name),
+                        due_date = submission.cached_due_date.orFallback(detail.due_at.orEmpty()),
+                        late_at = detail.late_at.orFallback(detail.lock_at.orEmpty()),
+                        description = detail.description,
+                        url = detail.html_url,
+                    )
+                }
+            }
+            .toList()
+
+        val todoList = assignmentRequests.awaitAll().toMutableList()
+        val relevantTodoDetails = if (includeCommons || includeCommonsForTracking) {
+            todoDetails
+        } else {
+            emptyList()
+        }
+        val commonsTrackingItems = relevantTodoDetails.toCommonsTrackingItems(courseId, now)
+        if (includeCommons) {
+            todoList += relevantTodoDetails.toCommonsTodoList(now)
+        }
+
+        TodoBuildResult(
+            todoList = todoList.sortedBy { it.due_date },
+            commonsStats = commonsTrackingItems.toUnsubmittedStats(),
+            commonsTrackingItems = commonsTrackingItems,
+            completedCommonsSubmissions = relevantTodoDetails.toCompletedCommonsSubmissions(),
         )
     }
 
@@ -519,4 +669,10 @@ internal data class TodoBuildResult(
     val commonsStats: LmsApi.UnsubmittedStats = LmsApi.UnsubmittedStats(),
     val commonsTrackingItems: List<TodoTrackingItem> = emptyList(),
     val completedCommonsSubmissions: List<Submission> = emptyList(),
+)
+
+private data class ParallelTodoCourseResult(
+    val subject: Subject?,
+    val stats: LmsApi.UnsubmittedStats,
+    val trackingItems: List<TodoTrackingItem>,
 )

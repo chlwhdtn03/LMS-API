@@ -1,6 +1,10 @@
 package io.github.chlwhdtn03.internal
 
 import io.github.chlwhdtn03.data.Lms.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.withContext
 import kotlin.time.ExperimentalTime
 
 /** 전체 수강 과목 정보와 출석·공지·점수 조합을 담당합니다. */
@@ -83,17 +87,68 @@ internal class LmsCourseService(
         return subjects
     }
 
-    private inline fun <T> Iterable<T>.associateFirstById(
-        keySelector: (T) -> Int,
-    ): Map<Int, T> {
-        val result = mutableMapOf<Int, T>()
-        for (item in this) {
-            val key = keySelector(item)
-            if (!result.containsKey(key)) {
-                result[key] = item
-            }
+    /**
+     * 로그인 이후 과목별 요청을 병렬로 수행하는 [getSubjects]의 비교용 경로입니다.
+     * 반환되는 과목 순서는 LMS가 반환한 수강 과목 순서와 같습니다.
+     */
+    suspend fun getSubjectsParallel(
+        term: Term,
+        loadingState: (Float) -> Unit = {},
+    ): List<Subject> = withContext(Dispatchers.Default) {
+        ensureLoggedIn()
+
+        val lecturesDeferred = async { courseClient.fetchLectures(term) }
+        val learnStatusesDeferred = async { courseClient.fetchLearnStatuses(term) }
+        val lectures = lecturesDeferred.await()
+        val initialRequests = lectures.map { lecture ->
+            prefetchCourseRequests(courseClient, lecture)
         }
-        return result
+        val learnStatusByCourseId = learnStatusesDeferred.await()
+            .learnstatuses
+            .associateFirstById { it.course.id }
+
+        loadingState(0.3f)
+        val weight = if (lectures.isEmpty()) 0f else 0.7f / lectures.size
+        initialRequests.map { initial ->
+            async {
+                val lecture = initial.lecture
+                val (submissions, permissionFailed) = initial.submissions.await()
+                val assignmentMetadataById = initial.metadata.await()
+                courseClient.applyAssignmentMetadata(submissions, assignmentMetadataById)
+                val todoResult = todoService.buildCourseTodoParallel(
+                    courseId = lecture.id,
+                    submissions = submissions,
+                    includeCommons = true,
+                    todoDetails = initial.todoDetails.await(),
+                )
+
+                Subject(
+                    id = lecture.id,
+                    termId = lecture.term_id,
+                    termName = term.name ?: "학기정보 없음",
+                    name = lecture.name,
+                    professor = lecture.professors,
+                    totalStudents = lecture.total_students,
+                    todoList = todoResult.todoList,
+                    attendances = learnStatusByCourseId[lecture.id]
+                        .toAttendances(permissionFailed),
+                    discussions = if (!permissionFailed) {
+                        initial.discussions.await().getOrThrow()
+                    } else {
+                        emptyList()
+                    },
+                    submissions = submissions + todoResult.completedCommonsSubmissions,
+                    scoredAssignments = if (!permissionFailed) {
+                        buildScoredAssignments(submissions, assignmentMetadataById)
+                    } else {
+                        emptyList()
+                    },
+                    permissionFailed = permissionFailed,
+                )
+            }
+        }.awaitAll().also { subjects ->
+            subjects.indices.forEach { index -> loadingState(0.3f + weight * (index + 1)) }
+        }
     }
 
     private fun buildScoredAssignments(

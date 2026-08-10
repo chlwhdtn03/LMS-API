@@ -394,6 +394,21 @@ object LmsApi {
     }
 
     /**
+     * 로그인 이후 과목별 요청을 병렬로 수행해 수강 과목 상세 정보를 조회합니다.
+     * 기존 [getSubjects]는 순차 동작을 유지합니다.
+     */
+    @ExperimentalTime
+    fun getSubjectsParallel(
+        term: Term,
+        loadingState: (Float) -> Unit = {},
+        completion: (LmsSubjectsResult) -> Unit,
+    ) {
+        launchSubjectsResult(completion) {
+            courseService.getSubjectsParallel(term, loadingState)
+        }
+    }
+
+    /**
      * 제출해야 할 과제, 동영상 시청 정보 등 할 일 중심 정보를 비동기 방식으로 빠르게 조회하고 그 결과를 completion 콜백으로 전달합니다.
      *
      * @param term 학기 정보
@@ -439,6 +454,44 @@ object LmsApi {
     }
 
     /**
+     * 로그인 이후 과목별 요청을 병렬로 수행해 Todo와 출석, 공지 정보를 함께 조회합니다.
+     * 기존 [getTodoList]는 순차 동작을 유지합니다.
+     */
+    @ExperimentalTime
+    fun getTodoListParallel(
+        term: Term,
+        loadingState: (Float) -> Unit = {},
+        completion: (LmsSubjectsResult) -> Unit,
+    ) {
+        getTodoListParallel(
+            term = term,
+            loadingState = loadingState,
+            postHogDistinctId = null,
+            completion = completion,
+        )
+    }
+
+    /**
+     * 로그인 이후 과목별 요청을 병렬로 수행해 Todo와 출석, 공지 정보를 함께 조회합니다.
+     * 기존 [getTodoList]는 순차 동작을 유지합니다.
+     */
+    @ExperimentalTime
+    fun getTodoListParallel(
+        term: Term,
+        loadingState: (Float) -> Unit = {},
+        postHogDistinctId: String? = null,
+        completion: (LmsSubjectsResult) -> Unit,
+    ) {
+        launchSubjectsResult(completion) {
+            todoService.getTodoListParallel(
+                term = term,
+                loadingState = loadingState,
+                postHogDistinctId = postHogDistinctId,
+            )
+        }
+    }
+
+    /**
      * 특정 학기의 수강 과목 상세 정보(할 일, 출석, 공지, 과제 등 전체 정보)를 가져옵니다.
      *
      * @param term 학기 정보
@@ -449,6 +502,15 @@ object LmsApi {
     @ExperimentalTime
     internal suspend fun getSubjects(term: Term, loadingState: (Float) -> Unit = {}): List<Subject> {
         return courseService.getSubjects(term, loadingState)
+    }
+
+    @Throws(Exception::class)
+    @ExperimentalTime
+    internal suspend fun getSubjectsParallel(
+        term: Term,
+        loadingState: (Float) -> Unit = {},
+    ): List<Subject> {
+        return courseService.getSubjectsParallel(term, loadingState)
     }
 
     /**
@@ -467,6 +529,20 @@ object LmsApi {
         postHogDistinctId: String? = null,
     ): List<Subject> {
         return todoService.getTodoList(
+            term = term,
+            loadingState = loadingState,
+            postHogDistinctId = postHogDistinctId,
+        )
+    }
+
+    @Throws(Exception::class)
+    @ExperimentalTime
+    internal suspend fun getTodoListParallel(
+        term: Term,
+        loadingState: (Float) -> Unit = {},
+        postHogDistinctId: String? = null,
+    ): List<Subject> {
+        return todoService.getTodoListParallel(
             term = term,
             loadingState = loadingState,
             postHogDistinctId = postHogDistinctId,

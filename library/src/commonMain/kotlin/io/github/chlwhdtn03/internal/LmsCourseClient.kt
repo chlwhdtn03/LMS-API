@@ -45,6 +45,14 @@ internal class LmsCourseClient(
             return emptyMap()
         }
 
+        val metadataById = fetchAssignmentMetadata(courseId)
+        applyAssignmentMetadata(submissions, metadataById)
+        return metadataById
+    }
+
+    suspend fun fetchAssignmentMetadata(
+        courseId: Int,
+    ): Map<Int, CourseAssignmentMetadata> {
         val groups = client.get(canvasUrl("/api/v1/courses/$courseId/assignment_groups")) {
             url {
                 parameters.append("exclude_response_fields[]", "description")
@@ -68,12 +76,18 @@ internal class LmsCourseClient(
                 }
             }
         }
+        return metadataById
+    }
+
+    fun applyAssignmentMetadata(
+        submissions: List<Submission>,
+        metadataById: Map<Int, CourseAssignmentMetadata>,
+    ) {
         for (submission in submissions) {
             val metadata = metadataById[submission.assignment_id] ?: continue
             submission.name = metadata.name
             submission.groupName = metadata.groupName
         }
-        return metadataById
     }
 
     suspend fun fetchAssignmentDetail(
