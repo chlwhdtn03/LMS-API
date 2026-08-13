@@ -89,11 +89,16 @@ internal class WebDynproService(
      * SAP가 `setFocus` 같은 부분 변경만 반환하면 기존 HTML을 유지합니다. 브라우저처럼
      * DOM을 보관하지 않는 클라이언트가 부분 응답을 전체 페이지로 오인하지 않게 합니다.
      */
-    suspend fun refreshSession(context: WebDynproContext): WebDynproContext {
+    suspend fun refreshSession(
+        context: WebDynproContext,
+        eventQueue: String = initialEventQueue(context.url),
+        requestHeaders: Map<String, String> = emptyMap(),
+    ): WebDynproContext {
         val responseHtml = submitRaw(
             context = context,
-            eventQueue = initialEventQueue(context.url),
+            eventQueue = eventQueue,
             extractCdata = true,
+            requestHeaders = requestHeaders,
         )
         validateResponse(responseHtml, context.appName)
         return if (isRenderablePage(responseHtml)) {
@@ -283,6 +288,7 @@ internal class WebDynproService(
         context: WebDynproContext,
         eventQueue: String,
         extractCdata: Boolean,
+        requestHeaders: Map<String, String> = emptyMap(),
     ): String {
         val actionUrl = if (context.formAction.startsWith("http")) {
             context.formAction
@@ -304,6 +310,7 @@ internal class WebDynproService(
                 append(HttpHeaders.Accept, "*/*")
                 append("X-Requested-With", "XMLHttpRequest")
                 append(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
+                requestHeaders.forEach { (name, value) -> append(name, value) }
             }
         }
 

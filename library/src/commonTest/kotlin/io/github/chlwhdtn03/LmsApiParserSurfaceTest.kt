@@ -25,6 +25,42 @@ class LmsApiParserSurfaceTest {
         )
         assertEquals(1, graduateTable.items.size)
         assertEquals("전공학점", graduateTable.items.single().requirement)
+        assertEquals(emptyList(), graduateTable.items.single().usedSubjects)
+
+        val graduateTableWithUsedSubjects = LmsApi.parseGraduateTable(
+            table(
+                headers = listOf("이수구분", "졸업요건", "기준값", "계산값", "차이", "결과", "과목사용"),
+                values = listOf(
+                    "전공",
+                    "전공학점",
+                    "60",
+                    "63",
+                    "3",
+                    "충족",
+                    "자료구조, 운영체제,알고리즘",
+                ),
+            ),
+        )
+        assertEquals(
+            listOf("자료구조", "운영체제", "알고리즘"),
+            graduateTableWithUsedSubjects.items.single().usedSubjects,
+        )
+
+        val graduateTableWithContinuation = LmsApi.parseGraduateTable(
+            """
+                <table>
+                    <tr><th>이수구분</th><th>졸업요건</th><th>기준값</th><th>계산값</th><th>차이</th><th>결과</th><th>과목사용</th></tr>
+                    <tr><td>전공</td><td>전공학점</td><td>60</td><td>63</td><td>3</td><td>충족</td><td>자료구조, 운영체제</td></tr>
+                    <tr><td>전공필수</td><td>18</td><td>18</td><td>0</td><td>충족</td><td>알고리즘, 캡스톤디자인</td></tr>
+                </table>
+            """.trimIndent(),
+        )
+        assertEquals(2, graduateTableWithContinuation.items.size)
+        assertEquals("전공", graduateTableWithContinuation.items[1].classification)
+        assertEquals(
+            listOf("알고리즘", "캡스톤디자인"),
+            graduateTableWithContinuation.items[1].usedSubjects,
+        )
 
         val tuitionTable = LmsApi.parseTuitionTable(
             tableRow(

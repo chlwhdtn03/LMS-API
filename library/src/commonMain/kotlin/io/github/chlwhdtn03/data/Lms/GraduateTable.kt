@@ -9,7 +9,8 @@ data class GraduateTableCell(
     val standardValue: String,        // 기준값
     val calculatedValue: String,      // 계산값
     val difference: String,           // 계산값-기준값
-    val result: String                // 결과
+    val result: String,               // 결과
+    val usedSubjects: List<String> = emptyList() // 과목사용함
 )
 
 @Serializable

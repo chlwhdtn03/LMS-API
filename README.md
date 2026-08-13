@@ -60,7 +60,7 @@ Android 또는 Kotlin Multiplatform(KMP) 프로젝트에서는 Gradle 의존성�
 **Android 단일 프로젝트 (`build.gradle.kts`):**
 ```kotlin
 dependencies {
-    implementation("io.github.chlwhdtn03:lms:1.6.5.2")
+    implementation("io.github.chlwhdtn03:lms:1.6.5.3")
 }
 ```
 
@@ -69,7 +69,7 @@ dependencies {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("io.github.chlwhdtn03:lms:1.6.5.2")
+            implementation("io.github.chlwhdtn03:lms:1.6.5.3")
         }
     }
 }
@@ -633,6 +633,7 @@ fun getGraduateTable(completion: (LmsGraduateTableResult) -> Unit)
   - `calculatedValue`: 취득학점
   - `difference`: 차이값
   - `result`: 이수 여부 판정 (예: "합격", "미필")
+  - `usedSubjects`: 해당 요건에 사용된 과목명 리스트 (`과목사용` 열을 쉼표 단위로 분리)
 
 ### `Term` (LMS 학기 정보)
 - `id`: 학기 고유 ID
