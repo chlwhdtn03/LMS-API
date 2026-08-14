@@ -245,49 +245,87 @@ internal class CourseCatalogService(
         val tableRange = findResultTableRange(html)
         val rangeStart = tableRange?.first ?: 0
         val rangeEndExclusive = tableRange?.let { it.last + 1 } ?: html.length
+        val headerSchema = parseCourseColumnSchema(html, rangeStart, rangeEndExclusive)
         val result = mutableListOf<ParsedCourse>()
         for (row in COURSE_ROW_REGEX.findAll(html, rangeStart)) {
             if (row.range.first >= rangeEndExclusive) break
             val cells = COURSE_CELL_REGEX.findAll(row.groupValues[1])
                 .associate { it.groupValues[1].toInt() to it.groupValues[2] }
-            if (cells.size < MINIMUM_COURSE_COLUMN_COUNT) continue
-            // 교양 탭은 분류 열 뒤에 '교과영역'을 한 칸 더 제공합니다.
-            val subjectIndex = if (
-                cells.keys.maxOrNull()?.let { it >= GENERAL_COURSE_LAST_COLUMN } == true
-            ) 5 else 4
-            val subjectCode = cells[subjectIndex]?.stripHtmlTags().orEmpty().trim()
-            val subjectName = cells[subjectIndex + 1]?.stripHtmlTags().orEmpty().trim()
+            val schema = headerSchema ?: CourseColumnSchema.fromCells(cells)
+            if (schema == null) continue
+            val subjectCode = cells.textAt(schema.subjectCode).trim()
+            val subjectName = cells.textAt(schema.subjectName).trim()
             if (subjectCode.isBlank() || subjectName.isBlank()) continue
 
-            val planHtml = cells[0].orEmpty()
+            val planHtml = cells[schema.plan].orEmpty()
             result += ParsedCourse(
                 course = CourseCatalogCourse(
                     plan = extractNavigationUrl(planHtml).orEmpty(),
-                    primaryClassification = cells[1]?.stripHtmlTags().orEmpty(),
-                    multiMajorClassification = cells[2]?.stripHtmlTags().orEmpty(),
-                    engineeringCertification = cells[3]?.stripHtmlTags().orEmpty(),
-                    curriculumArea = if (subjectIndex == 5) {
-                        cells[4]?.stripHtmlTags().orEmpty()
-                    } else {
-                        ""
-                    },
+                    primaryClassification = cells.textAt(schema.primaryClassification),
+                    multiMajorClassification = cells.textAt(schema.multiMajorClassification),
+                    engineeringCertification = cells.textAt(schema.engineeringCertification),
+                    curriculumArea = cells.textAt(schema.curriculumArea),
                     subjectCode = subjectCode,
                     subjectName = subjectName,
-                    registrationNotice = cells[subjectIndex + 2]?.stripHtmlTags().orEmpty(),
-                    courseType = cells[subjectIndex + 3]?.stripHtmlTags().orEmpty(),
-                    section = cells[subjectIndex + 4]?.stripHtmlTags().orEmpty(),
-                    professor = cells[subjectIndex + 5]?.stripHtmlTags().orEmpty(),
-                    department = cells[subjectIndex + 6]?.stripHtmlTags().orEmpty(),
-                    hoursCredits = cells[subjectIndex + 7]?.stripHtmlTags().orEmpty(),
-                    enrollmentCapacity = cells[subjectIndex + 8]?.stripHtmlTags().orEmpty(),
-                    remainingSeats = cells[subjectIndex + 9]?.stripHtmlTags().orEmpty(),
-                    schedule = cells[subjectIndex + 10]?.stripHtmlTags().orEmpty(),
-                    targetStudents = cells[subjectIndex + 11]?.stripHtmlTags().orEmpty(),
+                    registrationNotice = cells.textAt(schema.registrationNotice),
+                    courseType = cells.textAt(schema.courseType),
+                    section = cells.textAt(schema.section),
+                    professor = cells.textAt(schema.professor),
+                    department = cells.textAt(schema.department),
+                    hoursCredits = cells.textAt(schema.hoursCredits),
+                    enrollmentCapacity = cells.textAt(schema.enrollmentCapacity),
+                    remainingSeats = cells.textAt(schema.remainingSeats),
+                    schedule = cells.textAt(schema.schedule),
+                    program = cells.textAt(schema.program),
+                    targetStudents = cells.textAt(schema.targetStudents),
                 ),
                 planButtonId = findPlanButtonId(planHtml),
             )
         }
         return result
+    }
+
+    private fun parseCourseColumnSchema(
+        html: String,
+        rangeStart: Int,
+        rangeEndExclusive: Int,
+    ): CourseColumnSchema? {
+        val headers = COURSE_HEADER_REGEX.findAll(html, rangeStart)
+            .takeWhile { it.range.first < rangeEndExclusive }
+            .map { it.groupValues[1].stripHtmlTags().replace(WHITESPACE_REGEX, "") }
+            .toList()
+        if (headers.isEmpty()) return null
+
+        fun indexOf(vararg names: String): Int? {
+            return headers.indexOfFirst { it in names }.takeIf { it >= 0 }
+        }
+
+        val subjectCode = indexOf("과목번호") ?: return null
+        val subjectName = indexOf("과목명") ?: return null
+        return CourseColumnSchema(
+            plan = indexOf("계획", "강의계획서유무") ?: 0,
+            primaryClassification = indexOf("이수구분(주전공)", "이수구분"),
+            multiMajorClassification = indexOf("이수구분(다전공)", "다전공구분"),
+            engineeringCertification = indexOf("공학인증"),
+            curriculumArea = indexOf("교과영역"),
+            subjectCode = subjectCode,
+            subjectName = subjectName,
+            registrationNotice = indexOf("수강유의사항"),
+            courseType = indexOf("강좌유형정보", "강좌유형"),
+            section = indexOf("분반"),
+            professor = indexOf("교수명"),
+            department = indexOf("개설학과"),
+            hoursCredits = indexOf("시간/학점(설계)", "시간/학점"),
+            enrollmentCapacity = indexOf("수강인원"),
+            remainingSeats = indexOf("여석"),
+            schedule = indexOf("강의시간(강의실)", "강의시간"),
+            program = indexOf("과정"),
+            targetStudents = indexOf("수강대상"),
+        )
+    }
+
+    private fun Map<Int, String>.textAt(index: Int?): String {
+        return index?.let { this[it] }?.stripHtmlTags().orEmpty()
     }
 
     /** `null`은 대상 없음, 빈 문자열은 대상은 있으나 계획서 없음입니다. */
@@ -646,6 +684,66 @@ internal class CourseCatalogService(
         val planButtonId: String?,
     )
 
+    private data class CourseColumnSchema(
+        val plan: Int,
+        val primaryClassification: Int?,
+        val multiMajorClassification: Int?,
+        val engineeringCertification: Int?,
+        val curriculumArea: Int?,
+        val subjectCode: Int,
+        val subjectName: Int,
+        val registrationNotice: Int?,
+        val courseType: Int?,
+        val section: Int?,
+        val professor: Int?,
+        val department: Int?,
+        val hoursCredits: Int?,
+        val enrollmentCapacity: Int?,
+        val remainingSeats: Int?,
+        val schedule: Int?,
+        val program: Int?,
+        val targetStudents: Int?,
+    ) {
+        companion object {
+            fun fromCells(cells: Map<Int, String>): CourseColumnSchema? {
+                val lastIndex = cells.keys.maxOrNull() ?: return null
+                val subjectIndex = cells.entries.firstOrNull { (index, html) ->
+                    index in 1..MAX_SUBJECT_COLUMN_INDEX &&
+                        html.stripHtmlTags().trim().matches(COURSE_CODE_REGEX)
+                }?.key ?: return null
+                val hasProgramColumn = lastIndex - subjectIndex >= COMMON_COLUMNS_WITH_PROGRAM
+                val targetIndex = subjectIndex + if (hasProgramColumn) {
+                    COMMON_COLUMNS_WITH_PROGRAM
+                } else {
+                    COMMON_COLUMNS_WITHOUT_PROGRAM
+                }
+                if (targetIndex > lastIndex || (subjectIndex..targetIndex).any { it !in cells }) {
+                    return null
+                }
+                return CourseColumnSchema(
+                    plan = 0,
+                    primaryClassification = 1.takeIf { subjectIndex >= 2 },
+                    multiMajorClassification = 2.takeIf { subjectIndex >= 4 },
+                    engineeringCertification = 3.takeIf { subjectIndex >= 4 },
+                    curriculumArea = 4.takeIf { subjectIndex >= 5 },
+                    subjectCode = subjectIndex,
+                    subjectName = subjectIndex + 1,
+                    registrationNotice = subjectIndex + 2,
+                    courseType = subjectIndex + 3,
+                    section = subjectIndex + 4,
+                    professor = subjectIndex + 5,
+                    department = subjectIndex + 6,
+                    hoursCredits = subjectIndex + 7,
+                    enrollmentCapacity = subjectIndex + 8,
+                    remainingSeats = subjectIndex + 9,
+                    schedule = subjectIndex + 10,
+                    program = (subjectIndex + 11).takeIf { hasProgramColumn },
+                    targetStudents = targetIndex,
+                )
+            }
+        }
+    }
+
     private companion object {
         const val APP_NAME = "ZCMW2100"
         const val ECC_ORIGIN = "https://ecc.ssu.ac.kr:8443"
@@ -653,8 +751,9 @@ internal class CourseCatalogService(
             "$ECC_ORIGIN/sap/bc/webdynpro/SAP/$APP_NAME?sap-language=KO"
         const val PAGE_SIZE_KEY = "500"
         const val PAGE_SIZE = 500
-        const val MINIMUM_COURSE_COLUMN_COUNT = 16
-        const val GENERAL_COURSE_LAST_COLUMN = 16
+        const val COMMON_COLUMNS_WITHOUT_PROGRAM = 11
+        const val COMMON_COLUMNS_WITH_PROGRAM = 12
+        const val MAX_SUBJECT_COLUMN_INDEX = 6
         const val MAX_PAGE_COUNT = 100
         const val TOTAL_COUNT_WINDOW_SIZE = 512
 
@@ -664,6 +763,12 @@ internal class CourseCatalogService(
             """<td\b[^>]*\bcc="(\d+)"[^>]*>([\s\S]*?)</td>""",
             RegexOption.IGNORE_CASE,
         )
+        val COURSE_HEADER_REGEX = Regex(
+            """<th\b(?=[^>]*\brole="columnheader")[^>]*>([\s\S]*?)</th>""",
+            RegexOption.IGNORE_CASE,
+        )
+        val WHITESPACE_REGEX = Regex("""\s+""")
+        val COURSE_CODE_REGEX = Regex("""\d{8,}""")
         val RESULT_TABLE_START_REGEX = Regex(
             """<table\b(?=[^>]*\bid="([^"]+)")(?=[^>]*\bct="ST")[^>]*>""",
             RegexOption.IGNORE_CASE,

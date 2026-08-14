@@ -231,6 +231,69 @@ class LmsApiParserSurfaceTest {
         assertEquals("2150000101", general.items.single().subjectCode)
         assertEquals("현대인과성서", general.items.single().subjectName)
         assertEquals("", general.items.single().plan)
+
+        val chapel = LmsApi.parseCourseCatalogTable(
+            courseCatalogHtml(
+                listOf(
+                    "",
+                    "채플",
+                    "2150101509",
+                    "비전채플",
+                    "",
+                    "",
+                    "",
+                    "반광준",
+                    "학원선교팀",
+                    "1.0/0.5",
+                    "703",
+                    "277",
+                    "수 15:00-15:50 (한경직기념관 08110-반광준)",
+                    "전체학년 수강가능",
+                ),
+                totalCount = 1,
+            ),
+            query.copy(category = CourseCatalogCategory.CHAPEL),
+        )
+
+        assertEquals(1, chapel.items.size)
+        assertEquals("채플", chapel.items.single().primaryClassification)
+        assertEquals("2150101509", chapel.items.single().subjectCode)
+        assertEquals("비전채플", chapel.items.single().subjectName)
+        assertEquals("반광준", chapel.items.single().professor)
+        assertEquals("703", chapel.items.single().enrollmentCapacity)
+        assertEquals("277", chapel.items.single().remainingSeats)
+
+        val crossMajor = LmsApi.parseCourseCatalogTable(
+            courseCatalogHtml(
+                listOf(
+                    "",
+                    "전선-컴퓨터",
+                    "복선-인공지능",
+                    "공학주제",
+                    "전공",
+                    "2150168401",
+                    "컴퓨터비전",
+                    "",
+                    "EL+",
+                    "01",
+                    "김교수",
+                    "AI소프트웨어학부",
+                    "3.0/3.0",
+                    "45",
+                    "3",
+                    "월 09:00-10:15",
+                    "학사과정",
+                    "전체학년",
+                ),
+                totalCount = 1,
+            ),
+            query.copy(category = CourseCatalogCategory.CROSS_MAJOR),
+        ).items.single()
+
+        assertEquals("전선-컴퓨터", crossMajor.primaryClassification)
+        assertEquals("복선-인공지능", crossMajor.multiMajorClassification)
+        assertEquals("학사과정", crossMajor.program)
+        assertEquals("전체학년", crossMajor.targetStudents)
     }
 
     @Test
@@ -336,11 +399,27 @@ class LmsApiParserSurfaceTest {
     private fun courseCatalogHtml(values: List<String>, totalCount: Int): String {
         val cells = values.mapIndexed { index, value -> "<td cc=\"$index\">$value</td>" }
             .joinToString("")
+        val classificationHeaders = when (values.size) {
+            14 -> listOf("계획", "이수구분(주전공)")
+            16 -> listOf("계획", "이수구분", "다전공구분", "공학인증")
+            17 -> listOf("계획", "이수구분", "다전공구분", "공학인증", "교과영역")
+            18 -> listOf(
+                "계획", "이수구분(주전공)", "이수구분(다전공)", "공학인증", "교과영역",
+            )
+            else -> error("지원하지 않는 테스트 수강편람 열 수입니다: ${values.size}")
+        }
+        val commonHeaders = listOf(
+            "과목번호", "과목명", "수강유의사항", "강좌유형정보", "분반", "교수명",
+            "개설학과", "시간/학점(설계)", "수강인원", "여석", "강의시간(강의실)",
+        ) + if (values.size == 18) listOf("과정", "수강대상") else listOf("수강대상")
+        val headers = (classificationHeaders + commonHeaders).joinToString("") { header ->
+            "<th role=\"columnheader\">$header</th>"
+        }
         return """
             <table id="OTHER_TABLE" ct="ST"><tr>$cells</tr></table>
             <span>총 ${totalCount}건</span>
             <table id="COURSE_RESULT" ct="ST">
-                <tr><th>강의계획서 유무</th></tr>
+                <tr>$headers</tr>
                 <tr>$cells</tr>
             </table>
         """.trimIndent()

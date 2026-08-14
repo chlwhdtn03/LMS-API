@@ -85,6 +85,8 @@ data class CourseCatalogCourse(
     val remainingSeats: String,
     val schedule: String,
     val targetStudents: String,
+    /** 학부·대학원 등 수강편람의 과정 구분이며, 해당 열이 없는 조회 유형에서는 빈 문자열입니다. */
+    val program: String = "",
     /** [loadPlan]이 과목을 다시 찾을 때 사용하는 조회 학년도입니다. */
     val year: String = "",
     /** [loadPlan]이 과목을 다시 찾을 때 사용하는 조회 학기입니다. */
