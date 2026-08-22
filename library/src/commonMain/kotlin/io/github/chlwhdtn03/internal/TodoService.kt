@@ -522,6 +522,8 @@ internal class TodoService(
                     late_at = contentData.late_at.orEmpty(),
                     description = contentData.description,
                     url = contentData.item_content_data.view_url.orEmpty(),
+                    moduleItemId = item.module_item_id,
+                    durationOfVideo = contentData.item_content_data.duration
                 )
             }
         }

@@ -15,4 +15,6 @@ data class TodoList(
     val late_at: String? = "",
     val description: String? = "",
     val url: String? = "",
+    val moduleItemId: Int? = 0,
+    val durationOfVideo: Double? = -1.0, // 영상 강의인 경우에만
 )
