@@ -5,7 +5,6 @@ import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.http.*
-import io.ktor.serialization.*
 import kotlinx.coroutines.CancellationException
 import kotlin.time.ExperimentalTime
 
@@ -54,16 +53,22 @@ internal class LmsCourseClient(
     suspend fun fetchAssignmentMetadata(
         courseId: Int,
     ): Map<Int, CourseAssignmentMetadata> {
-        val groups = client.get(canvasUrl("/api/v1/courses/$courseId/assignment_groups")) {
-            url {
-                parameters.append("exclude_response_fields[]", "description")
-                parameters.append("exclude_response_fields[]", "rubric")
-                parameters.append("include[]", "assignments")
-                parameters.append("include[]", "discussion_topic")
-                parameters.append("override_assignment_dates", "true")
-                parameters.append("per_page", "50")
-            }
-        }.body<List<AssignmentGroup>>()
+        val groups = try {
+            client.get(canvasUrl("/api/v1/courses/$courseId/assignment_groups")) {
+                url {
+                    parameters.append("exclude_response_fields[]", "description")
+                    parameters.append("exclude_response_fields[]", "rubric")
+                    parameters.append("include[]", "assignments")
+                    parameters.append("include[]", "discussion_topic")
+                    parameters.append("override_assignment_dates", "true")
+                    parameters.append("per_page", "50")
+                }
+            }.body<List<AssignmentGroup>>()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            emptyList()
+        }
 
         val metadataById = mutableMapOf<Int, CourseAssignmentMetadata>()
         for (group in groups) {
@@ -101,20 +106,28 @@ internal class LmsCourseClient(
     }
 
     suspend fun fetchTodoDetails(courseId: Int): List<TodoDetail> {
-        return client.get(
-            canvasUrl("/learningx/api/v1/courses/$courseId/modules?include_detail=true"),
-        ) {
-            appendBearerToken()
-        }.body()
+        return try {
+            client.get(
+                canvasUrl("/learningx/api/v1/courses/$courseId/modules?include_detail=true"),
+            ) {
+                appendBearerToken()
+            }.body()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            emptyList()
+        }
     }
 
     suspend fun fetchSubmissions(courseId: Int): Pair<List<Submission>, Boolean> {
-        val response = client.get(canvasUrl("/api/v1/courses/$courseId/students/submissions")) {
-            parameter("per_page", "100")
-        }
         return try {
+            val response = client.get(canvasUrl("/api/v1/courses/$courseId/students/submissions")) {
+                parameter("per_page", "100")
+            }
             response.body<List<Submission>>() to false
-        } catch (_: JsonConvertException) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
             emptyList<Submission>() to true
         }
     }
