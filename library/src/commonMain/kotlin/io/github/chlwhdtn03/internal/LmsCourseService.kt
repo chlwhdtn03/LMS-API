@@ -4,6 +4,8 @@ import io.github.chlwhdtn03.data.Lms.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.time.ExperimentalTime
 
@@ -97,9 +99,11 @@ internal class LmsCourseService(
     ): List<Subject> = withContext(Dispatchers.Default) {
         ensureLoggedIn()
 
+        loadingState(0.1f)
         val lecturesDeferred = async { courseClient.fetchLectures(term) }
         val learnStatusesDeferred = async { courseClient.fetchLearnStatuses(term) }
         val lectures = lecturesDeferred.await()
+        loadingState(0.2f)
         val initialRequests = lectures.map { lecture ->
             prefetchCourseRequests(courseClient, lecture)
         }
@@ -109,6 +113,9 @@ internal class LmsCourseService(
 
         loadingState(0.3f)
         val weight = if (lectures.isEmpty()) 0f else 0.7f / lectures.size
+        val progressMutex = Mutex()
+        var completedCourses = 0
+
         initialRequests.map { initial ->
             async {
                 val lecture = initial.lecture
@@ -122,7 +129,7 @@ internal class LmsCourseService(
                     todoDetails = initial.todoDetails.await(),
                 )
 
-                Subject(
+                val subject = Subject(
                     id = lecture.id,
                     termId = lecture.term_id,
                     termName = term.name ?: "학기정보 없음",
@@ -133,7 +140,7 @@ internal class LmsCourseService(
                     attendances = learnStatusByCourseId[lecture.id]
                         .toAttendances(permissionFailed),
                     discussions = if (!permissionFailed) {
-                        initial.discussions.await().getOrThrow()
+                        initial.discussions.await().getOrDefault(emptyList())
                     } else {
                         emptyList()
                     },
@@ -145,10 +152,12 @@ internal class LmsCourseService(
                     },
                     permissionFailed = permissionFailed,
                 )
+
+                val currentCompleted = progressMutex.withLock { ++completedCourses }
+                loadingState(0.3f + weight * currentCompleted)
+                subject
             }
-        }.awaitAll().also { subjects ->
-            subjects.indices.forEach { index -> loadingState(0.3f + weight * (index + 1)) }
-        }
+        }.awaitAll()
     }
 
     private fun buildScoredAssignments(

@@ -110,7 +110,11 @@ internal class TodoService(
                 totalStudents = lecture.total_students,
                 todoList = todoResult.todoList,
                 attendances = emptyList(),
-                discussions = emptyList(),
+                discussions = if (!permissionFailed) {
+                    courseClient.fetchDiscussions(lecture.id)
+                } else {
+                    emptyList()
+                },
                 submissions = submissions + todoResult.completedCommonsSubmissions,
                 scoredAssignments = emptyList(),
                 permissionFailed = permissionFailed,
@@ -140,9 +144,11 @@ internal class TodoService(
         withContext(Dispatchers.Default) {
             ensureLoggedIn()
 
+            loadingState(0.1f)
             val lecturesDeferred = async { courseClient.fetchLectures(term) }
             val learnStatusesDeferred = async { courseClient.fetchLearnStatuses(term) }
             val lectures = lecturesDeferred.await()
+            loadingState(0.2f)
             val initialRequests = lectures.map { lecture ->
                 prefetchCourseRequests(courseClient, lecture)
             }
@@ -154,6 +160,9 @@ internal class TodoService(
             val weight = if (lectures.isEmpty()) 0f else 0.7f / lectures.size
             val now = Clock.System.now()
             val shouldTrackPostHog = !postHogDistinctId.isNullOrBlank()
+            val progressMutex = Mutex()
+            var completedCourses = 0
+
             val courseResults = initialRequests.map { initial ->
                 async {
                     val lecture = initial.lecture
@@ -187,7 +196,7 @@ internal class TodoService(
                         )
                     }
 
-                    ParallelTodoCourseResult(
+                    val result = ParallelTodoCourseResult(
                         subject = if (includeSubject) Subject(
                             id = lecture.id,
                             termId = lecture.term_id,
@@ -198,8 +207,8 @@ internal class TodoService(
                             todoList = todoResult.todoList,
                             attendances = learnStatusByCourseId[lecture.id]
                                 .toAttendances(permissionFailed),
-                            discussions = if (includeSubject && !permissionFailed) {
-                                initial.discussions.await().getOrThrow()
+                            discussions = if (!permissionFailed) {
+                                initial.discussions.await().getOrDefault(emptyList())
                             } else {
                                 emptyList()
                             },
@@ -217,6 +226,10 @@ internal class TodoService(
                             emptyList()
                         },
                     )
+
+                    val currentCompleted = progressMutex.withLock { ++completedCourses }
+                    loadingState(0.3f + weight * currentCompleted)
+                    result
                 }
             }.awaitAll()
 
@@ -228,7 +241,6 @@ internal class TodoService(
                 items = courseResults.flatMap { it.trackingItems },
                 postHogDistinctId = postHogDistinctId,
             )
-            courseResults.indices.forEach { index -> loadingState(0.3f + weight * (index + 1)) }
             courseResults.mapNotNull { it.subject }
         }
     }

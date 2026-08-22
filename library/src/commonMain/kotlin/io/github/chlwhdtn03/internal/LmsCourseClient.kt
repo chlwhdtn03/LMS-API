@@ -6,6 +6,7 @@ import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.*
+import kotlinx.coroutines.CancellationException
 import kotlin.time.ExperimentalTime
 
 /**
@@ -119,17 +120,23 @@ internal class LmsCourseClient(
     }
 
     suspend fun fetchDiscussions(courseId: Int): List<Discussion> {
-        return client.get(
-            canvasUrl(
-                "/api/v1/courses/$courseId/discussion_topics" +
-                    "?only_announcements=true&per_page=40&page=1&filter_by=all" +
-                    "&no_avatar_fallback=1&include[]=sections_user_count&include[]=sections",
-            ),
-        ) {
-            headers {
-                append(HttpHeaders.Referrer, canvasUrl("/courses/$courseId/announcements"))
-            }
-        }.body()
+        return try {
+            client.get(
+                canvasUrl(
+                    "/api/v1/courses/$courseId/discussion_topics" +
+                        "?only_announcements=true&per_page=40&page=1&filter_by=all" +
+                        "&no_avatar_fallback=1&include[]=sections_user_count&include[]=sections",
+                ),
+            ) {
+                headers {
+                    append(HttpHeaders.Referrer, canvasUrl("/courses/$courseId/announcements"))
+                }
+            }.body()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            emptyList()
+        }
     }
 
     private fun HttpRequestBuilder.appendBearerToken() {
