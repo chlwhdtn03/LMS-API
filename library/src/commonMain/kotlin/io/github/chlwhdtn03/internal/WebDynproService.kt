@@ -76,7 +76,11 @@ internal class WebDynproService(
             secureId = secureId,
             formAction = formAction,
         )
-        return refreshSession(initialContext)
+        return if (initialHtml.contains("_loadingPlaceholder_") || !containsTable(initialHtml)) {
+            refreshSession(initialContext)
+        } else {
+            initialContext
+        }
     }
 
     suspend fun fetchHtml(url: String, appName: String): String {
