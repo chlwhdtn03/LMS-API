@@ -33,13 +33,10 @@ internal class CyberCourseService(
                 append("prgmId", "LRN_LM_S_018")
                 append("subjType", "atnlcSubj")
                 append("authrtSeCd", "")
-                // 서버가 세션이 아닌 파라미터로 "현재 과목"을 판별할 가능성에 대비해 함께 전달한다.
-                // 필드명은 실제 요청을 확인해 검증이 필요하다.
                 append("shyr", subject.year)
                 append("smstCd", subject.semesterCode)
                 append("coseCd", subject.courseCode)
                 append("dertCd", subject.deptCode)
-                append("userNo", subject.userNo)
             },
         )
         return parseWeeklyLectures(response.bodyAsText())

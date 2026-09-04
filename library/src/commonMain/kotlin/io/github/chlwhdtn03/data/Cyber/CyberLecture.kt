@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 /**
  * 강의 한 편(주차 내 1강, 2강 ...)의 학습 정보.
  *
- * `lectures_list.htm`에는 완료 여부를 나타내는 명시적인 boolean 필드가 없어,
  * [progressPercent]가 100 이상이면 완료로 간주하는 [isCompleted]를 계산 프로퍼티로 둔다.
  */
 @Serializable
