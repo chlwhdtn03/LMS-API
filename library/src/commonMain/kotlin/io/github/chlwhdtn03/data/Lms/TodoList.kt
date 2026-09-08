@@ -17,4 +17,5 @@ data class TodoList(
     val url: String? = "",
     val moduleItemId: Int? = 0,
     val durationOfVideo: Double? = -1.0, // 영상 강의인 경우에만
+    val attachments: List<Attachment>? = emptyList(), // 제출한 파일 항목
 )

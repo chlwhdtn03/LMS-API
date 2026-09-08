@@ -320,6 +320,7 @@ internal class TodoService(
                 late_at = detail.late_at.orFallback(detail.lock_at.orEmpty()),
                 description = detail.description,
                 url = detail.html_url,
+                attachments = submission.attachments
             )
         }
 
@@ -523,7 +524,8 @@ internal class TodoService(
                     description = contentData.description,
                     url = contentData.item_content_data.view_url.orEmpty(),
                     moduleItemId = item.module_item_id,
-                    durationOfVideo = contentData.item_content_data.duration
+                    durationOfVideo = contentData.item_content_data.duration,
+                    attachments = emptyList() // common 타입에는 제출한 과제가 없을겁니다. 그냥 empty로 둡니다
                 )
             }
         }
