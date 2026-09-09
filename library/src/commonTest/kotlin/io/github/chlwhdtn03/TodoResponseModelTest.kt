@@ -76,4 +76,61 @@ class TodoResponseModelTest {
         assertEquals(listOf("online_upload"), response.submission_types)
         assertEquals(10.0, response.points_possible)
     }
+
+    @Test
+    fun parsesTodoDetailWithUnlockAt() {
+        val jsonString = """
+        [
+          {
+            "module_id": 878875,
+            "title": "1주차",
+            "position": 1,
+            "published": null,
+            "unlock_at": null,
+            "module_items": [
+              {
+                "module_item_id": 3370359,
+                "title": "컴파일러-1장 강의노트",
+                "content_type": "attendance_item",
+                "content_id": 909084,
+                "content_data": {
+                  "item_id": 909084,
+                  "course_id": 49313,
+                  "use_attendance": false,
+                  "item_content_type": "commons",
+                  "title": "컴파일러-1장 강의노트",
+                  "unlock_at": "2026-08-30T15:00:00Z",
+                  "late_at": null,
+                  "due_at": "2026-09-14T14:59:59Z",
+                  "lock_at": "2026-09-14T14:59:59Z"
+                },
+                "completed": true
+              },
+              {
+                "module_item_id": 3378859,
+                "title": "과제-1",
+                "content_type": "assignment",
+                "content_id": 738244,
+                "content_data": {
+                  "unlock_at": "2026-09-02T15:00:00Z",
+                  "due_at": "2026-09-08T00:00:00Z",
+                  "lock_at": "2026-09-08T00:00:00Z"
+                },
+                "completed": true
+              }
+            ]
+          }
+        ]
+        """.trimIndent()
+
+        val list = json.decodeFromString<List<io.github.chlwhdtn03.data.Lms.TodoDetail>>(jsonString)
+        assertEquals(1, list.size)
+        val module = list.first()
+        assertEquals(878875, module.module_id)
+        assertEquals(null, module.unlock_at)
+        val item1 = module.module_items?.get(0)
+        assertEquals("2026-08-30T15:00:00Z", item1?.content_data?.unlock_at)
+        val item2 = module.module_items?.get(1)
+        assertEquals("2026-09-02T15:00:00Z", item2?.content_data?.unlock_at)
+    }
 }

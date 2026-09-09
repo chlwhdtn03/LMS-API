@@ -8,6 +8,7 @@ data class TodoDetail(
     val title: String? = "",
     val position: Int? = 0,
     val module_items: List<TodoDetailModuleItem>? = emptyList(),
+    val unlock_at: String? = "",
 )
 
 @Serializable
@@ -31,6 +32,7 @@ data class TodoDetailContentData(
     val use_attendance: Boolean? = true,
     val due_at: String? = "",
     val late_at: String? = "",
+    val unlock_at: String? = "",
 )
 
 @Serializable

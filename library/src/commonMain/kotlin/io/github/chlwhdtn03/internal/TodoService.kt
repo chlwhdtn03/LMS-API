@@ -304,6 +304,8 @@ internal class TodoService(
             if (!submission.cached_due_date.isFutureInstant(now)) continue
 
             val detail = courseClient.fetchAssignmentDetail(courseId, assignmentId)
+            if (!detail.unlock_at.isUnlocked(now)) continue
+
             val dueDate = submission.cached_due_date.orFallback(detail.due_at.orEmpty())
             todoList += TodoList(
                 section_id = 0,
@@ -318,6 +320,7 @@ internal class TodoService(
                 title = detail.name.orFallback(submission.name),
                 due_date = dueDate,
                 late_at = detail.late_at.orFallback(detail.lock_at.orEmpty()),
+                unlock_at = detail.unlock_at.orEmpty(),
                 description = detail.description,
                 url = detail.html_url,
                 attachments = submission.attachments
@@ -367,6 +370,8 @@ internal class TodoService(
                 async {
                     val assignmentId = requireNotNull(submission.assignment_id)
                     val detail = courseClient.fetchAssignmentDetail(courseId, assignmentId)
+                    if (!detail.unlock_at.isUnlocked(now)) return@async null
+
                     TodoList(
                         section_id = 0,
                         unit_id = 0,
@@ -380,14 +385,16 @@ internal class TodoService(
                         title = detail.name.orFallback(submission.name),
                         due_date = submission.cached_due_date.orFallback(detail.due_at.orEmpty()),
                         late_at = detail.late_at.orFallback(detail.lock_at.orEmpty()),
+                        unlock_at = detail.unlock_at.orEmpty(),
                         description = detail.description,
                         url = detail.html_url,
+                        attachments = submission.attachments,
                     )
                 }
             }
             .toList()
 
-        val todoList = assignmentRequests.awaitAll().toMutableList()
+        val todoList = assignmentRequests.awaitAll().filterNotNull().toMutableList()
         val relevantTodoDetails = if (includeCommons || includeCommonsForTracking) {
             todoDetails
         } else {
@@ -495,6 +502,12 @@ internal class TodoService(
         return dueDate <= now
     }
 
+    private fun String?.isUnlocked(now: Instant): Boolean {
+        val value = takeUnless { it.isNullOrBlank() } ?: return true
+        val unlockDate = runCatching { Instant.parse(value) }.getOrNull() ?: return true
+        return now >= unlockDate
+    }
+
     private fun String?.orFallback(fallback: String): String {
         return takeUnless { it.isNullOrBlank() } ?: fallback
     }
@@ -502,6 +515,7 @@ internal class TodoService(
     private fun List<TodoDetail>.toCommonsTodoList(now: Instant): List<TodoList> {
         val result = mutableListOf<TodoList>()
         for (module in this) {
+            if (!module.unlock_at.isUnlocked(now)) continue
             for (item in module.module_items.orEmpty()) {
                 val contentData = item.content_data ?: continue
                 val contentType = contentData.item_content_type ?: continue
@@ -510,6 +524,10 @@ internal class TodoService(
                 if (contentData.use_attendance == false) continue
                 if (item.completed == true) continue
                 if (!contentData.due_at.isFutureInstant(now)) continue
+                if (!contentData.unlock_at.isUnlocked(now)) continue
+
+                val itemUnlockAt = contentData.unlock_at.takeUnless { it.isNullOrBlank() }
+                    ?: module.unlock_at.orEmpty()
 
                 result += TodoList(
                     section_id = 0,
@@ -521,6 +539,7 @@ internal class TodoService(
                     title = contentData.title.orFallback(item.title.orEmpty()),
                     due_date = contentData.due_at.orEmpty(),
                     late_at = contentData.late_at.orEmpty(),
+                    unlock_at = itemUnlockAt,
                     description = contentData.description,
                     url = contentData.item_content_data.view_url.orEmpty(),
                     moduleItemId = item.module_item_id,
