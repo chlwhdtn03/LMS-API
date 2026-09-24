@@ -1,6 +1,6 @@
 # LMS-API (SSU LMS & U-Saint Kotlin Multiplatform API)
 
-숭실대학교 LMS(Canvas, LearningX) 및 유세인트(U-Saint)의 학기, 강의, 할 일, 출석, 공지, 수강편람, 시간표, 성적, 채플, 등록금, 장학금, 졸업사정표 등의 정보를 조회하기 위한 Kotlin Multiplatform 라이브러리입니다.
+숭실대학교 LMS(Canvas, LearningX), 유세인트(U-Saint) 및 숭실사이버대학교(KCU)의 학기, 강의, 할 일, 출석, 공지, 수강편람, 시간표, 성적, 채플, 등록금, 장학금, 졸업사정표 등의 정보를 조회하기 위한 Kotlin Multiplatform 라이브러리입니다.
 
 이 README는 **Swift Package Manager(SPM)**를 이용한 iOS 연동과 **Gradle**을 이용한 Android/Kotlin 연동을 기준으로 작성되었습니다.
 
@@ -60,7 +60,7 @@ Android 또는 Kotlin Multiplatform(KMP) 프로젝트에서는 Gradle 의존성�
 **Android 단일 프로젝트 (`build.gradle.kts`):**
 ```kotlin
 dependencies {
-    implementation("io.github.chlwhdtn03:lms:1.6.8")
+    implementation("io.github.chlwhdtn03:lms:1.6.9")
 }
 ```
 
@@ -69,7 +69,7 @@ dependencies {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("io.github.chlwhdtn03:lms:1.6.8")
+            implementation("io.github.chlwhdtn03:lms:1.6.9")
         }
     }
 }
@@ -80,6 +80,9 @@ kotlin {
 ## 기본 흐름 및 로그인 (Authentication)
 
 LMS 조회 기능과 대부분의 유세인트(U-Saint) 조회 기능은 **LMS 로그인 완료 후** 생성된 세션을 공유하여 호출할 수 있습니다. 로그인에 성공하면 학번 정보와 토큰 정보가 내부적으로 캐싱되어 이후 호출되는 API에 자동으로 적용됩니다. 공개 수강편람 조회는 예외로, 로그인 없이 사용할 수 있습니다.
+
+> [!NOTE]
+> 숭실사이버대학교(KCU)는 별도 도메인(`portal.kcu.ac`, `lms.kcu.ac`)과 세션을 사용하므로, `LmsApi`와 무관하게 [CyberApi](#3-숭실사이버대학교kcu-조회-기능-사용법)를 통해 독립적으로 로그인하고 조회합니다.
 
 ### iOS (Swift) 로그인 예시
 ```swift
@@ -421,6 +424,152 @@ fun loadLMSForAndroid() {
 
 ---
 
+## 3. 숭실사이버대학교(KCU) 조회 기능 사용법
+
+숭실사이버대학교 포털(`portal.kcu.ac`) 및 LMS(`lms.kcu.ac`)에 로그인하여 수강 과목 목록과 주차별 강의 수강일람(출석 현황, 진도율, 학습 시간, 완료 여부 등)을 조회할 수 있습니다.
+
+`CyberApi`는 숭실대학교 LMS 및 유세인트(`LmsApi`)와 별개의 도메인과 시스템을 사용하므로, **세션 및 쿠키를 공유하지 않는 독립적인 싱글톤 객체**입니다.
+
+### iOS (Swift) 사용 예시
+
+iOS(Swift)에서는 Kotlin `object CyberApi`가 `CyberApi.shared`로 접근되며, `async/await` 또는 결과 콜백 방식을 모두 지원합니다.
+
+#### Swift (Async/Await)
+```swift
+import LmsApi
+
+func loadCyberUniversityLectures() {
+    Task {
+        do {
+            // 1. 사이버대학교 포털 로그인
+            let loginSuccess = try await CyberApi.shared.login(id: "아이디", password: "비밀번호")
+            guard loginSuccess.boolValue else {
+                print("로그인 실패")
+                return
+            }
+            
+            // 2. 이번 학기 수강과목 목록 조회
+            let subjects = try await CyberApi.shared.getSubjects()
+            for subject in subjects {
+                print("과목: \(subject.name) (\(subject.credit)학점) - 진도율: \(subject.progressPercent)%")
+            }
+            
+            // 3. 첫 번째 과목의 주차별 수강일람 조회
+            if let firstSubject = subjects.first {
+                let weeks = try await CyberApi.shared.getWeeklyLectures(subject: firstSubject)
+                for week in weeks {
+                    print("[\(week.weekNo)주차] \(week.topic) - 출석상태: \(week.attendanceStatus) (기간: \(week.attendancePeriod))")
+                    for lecture in week.lectures {
+                        print("  - \(lecture.lectureNo)강: \(lecture.statusText), 진도율: \(lecture.progressPercent)%, 학습시간: \(lecture.studyTime)/\(lecture.baseTime), 완료여부: \(lecture.isCompleted)")
+                    }
+                }
+            }
+            
+            // 4. 로그아웃 (세션 정리)
+            try await CyberApi.shared.logout()
+        } catch {
+            print("사이버대학교 정보 조회 실패: \(error.localizedDescription)")
+        }
+    }
+}
+```
+
+#### Swift (Callback)
+```swift
+import LmsApi
+
+func loadCyberWithCallback() {
+    CyberApi.shared.login(id: "아이디", password: "비밀번호") { loginResult in
+        guard loginResult.success else {
+            print("로그인 실패: \(loginResult.errorMessage ?? "알 수 없는 오류")")
+            return
+        }
+
+        CyberApi.shared.getSubjects { subjectsResult in
+            guard subjectsResult.success else {
+                print("수강과목 조회 실패: \(subjectsResult.errorMessage ?? "알 수 없는 오류")")
+                return
+            }
+
+            if let firstSubject = subjectsResult.subjects.first {
+                CyberApi.shared.getWeeklyLectures(subject: firstSubject) { lecturesResult in
+                    if lecturesResult.success {
+                        print("주차 수: \(lecturesResult.weeks.count)")
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+### Android (Kotlin) 사용 예시
+
+Android/Kotlin에서는 코루틴(`suspend`) 또는 결과 콜백 오버로드를 모두 지원합니다.
+
+#### Kotlin (Coroutine / Suspend)
+```kotlin
+import io.github.chlwhdtn03.CyberApi
+
+suspend fun loadCyberUniversityForAndroid() {
+    try {
+        // 1. 사이버대학교 포털 로그인
+        val loginSuccess = CyberApi.login(id = "아이디", password = "비밀번호")
+        if (!loginSuccess) {
+            println("로그인 실패")
+            return
+        }
+
+        // 2. 이번 학기 수강과목 목록 조회
+        val subjects = CyberApi.getSubjects()
+        subjects.forEach { subject ->
+            println("[${subject.name}] 교수: ${subject.professor}, 학점: ${subject.credit}, 진도율: ${subject.progressPercent}%")
+        }
+
+        // 3. 특정 과목의 주차별 수강일람 조회
+        val firstSubject = subjects.firstOrNull() ?: return
+        val weeks = CyberApi.getWeeklyLectures(firstSubject)
+        weeks.forEach { week ->
+            println("${week.weekNo}주차: ${week.topic} (${week.attendancePeriod}) [${week.attendanceStatus}]")
+            week.lectures.forEach { lecture ->
+                println("  - ${lecture.lectureNo}강: ${lecture.statusText}, 진도율: ${lecture.progressPercent}%, 완료여부: ${lecture.isCompleted}")
+            }
+        }
+
+        // 4. 로그아웃
+        CyberApi.logout()
+    } catch (e: Exception) {
+        println("사이버대학교 조회 중 오류 발생: ${e.message}")
+    }
+}
+```
+
+#### Kotlin (Callback)
+```kotlin
+import io.github.chlwhdtn03.CyberApi
+
+fun loadCyberWithCallback() {
+    CyberApi.login(id = "아이디", password = "비밀번호") { loginResult ->
+        if (loginResult.success) {
+            CyberApi.getSubjects { subjectsResult ->
+                if (subjectsResult.success) {
+                    val firstSubject = subjectsResult.subjects.firstOrNull() ?: return@getSubjects
+                    CyberApi.getWeeklyLectures(firstSubject) { lecturesResult ->
+                        if (lecturesResult.success) {
+                            println("주차 수: ${lecturesResult.weeks.size}")
+                        }
+                    }
+                }
+            }
+        } else {
+            println("로그인 실패: ${loginResult.errorMessage}")
+        }
+    }
+}
+```
+
+---
+
 ## 공개 API 레퍼런스
 
 ### 1. LMS 관련 API
@@ -543,6 +692,42 @@ suspend fun getGraduateTable(): GraduateTable
 fun getGraduateTable(completion: (LmsGraduateTableResult) -> Unit)
 ```
 졸업사정표 상의 이수구분별 졸업 기준 요건 학점, 본인 취득학점, 차이값 및 판정 결과를 조회합니다.
+
+---
+
+### 3. 사이버대학교(KCU) 관련 API (`CyberApi`)
+
+숭실사이버대학교 전용 API로, `LmsApi`와는 별도의 독립적인 싱글톤 객체입니다.
+
+#### `CyberApi.login`
+```kotlin
+suspend fun login(id: String, password: String): Boolean
+fun login(id: String, password: String, completion: (CyberLoginResult) -> Unit)
+```
+사이버대학교 포털(`portal.kcu.ac`)에 로그인합니다. 내부적으로 RSA 공개키를 조회하여 비밀번호를 암호화한 뒤 로그인을 수행하며, 성공 시 세션 쿠키를 보관합니다.
+
+로그인 여부는 외부에서 읽기 가능한 `CyberApi.isLoggined` 프로퍼티로 확인할 수 있습니다.
+
+#### `CyberApi.logout`
+```kotlin
+suspend fun logout()
+fun logout(completion: () -> Unit)
+```
+현재 사이버대학교 로그인 세션을 종료하고 로그인 상태를 해제합니다.
+
+#### `CyberApi.getSubjects`
+```kotlin
+suspend fun getSubjects(): List<CyberSubject>
+fun getSubjects(completion: (CyberSubjectsResult) -> Unit)
+```
+로그인된 사용자의 이번 학기 수강과목 목록(`CyberSubject`)을 가져옵니다. 과목명, 이수구분, 담당 교수, 학점, 전체 진도율 등이 포함되어 있습니다. (로그인 필수)
+
+#### `CyberApi.getWeeklyLectures`
+```kotlin
+suspend fun getWeeklyLectures(subject: CyberSubject): List<CyberWeek>
+fun getWeeklyLectures(subject: CyberSubject, completion: (CyberWeeklyLecturesResult) -> Unit)
+```
+특정 수강과목의 주차별 수강일람(`CyberWeek`) 및 하위 강의 목록(`CyberLecture`)을 조회합니다. 각 주차별 출석인정기간, 출석 상태, 강의별 학습 시간, 진도율, 완료 여부(`isCompleted`)를 확인할 수 있습니다. (로그인 필수)
 
 ---
 
@@ -673,6 +858,35 @@ fun getGraduateTable(completion: (LmsGraduateTableResult) -> Unit)
 - `workflow_state`: 제출 상태 (예: `submitted`, `graded`, `unsubmitted`)
 - `score`: 획득 점수
 
+### `CyberSubject` (사이버대 수강 과목)
+- `name`: 과목명
+- `category`: 이수구분 (예: "전공기초")
+- `professor`: 담당 교수
+- `credit`: 학점 (예: "3.0")
+- `progressPercent`: 전체 진도율 (%)
+- `year`: 학년도
+- `semesterCode`: 학기 코드
+- `courseCode`: 과목 코드
+- `deptCode`: 학과 코드
+- `userNo`: 사용자 번호
+
+### `CyberWeek` (사이버대 주차별 수강일람)
+- `weekNo`: 주차 번호 (예: 1)
+- `attendancePeriod`: 출석인정기간 (예: "2026.09.01 ~ 2026.09.14")
+- `topic`: 주차 주제 / 강의명
+- `attendanceStatus`: 출석 인정 상태 (예: "출석", "결석")
+- `lectures`: 주차 내 개별 강의 리스트 (`List<CyberLecture>`)
+
+### `CyberLecture` (사이버대 개별 강의)
+- `lectureNo`: 강 번호 (예: 1)
+- `statusText`: 학습 상태 텍스트 (예: "학습완료", "미학습")
+- `progressPercent`: 진도율 (%)
+- `studyTime`: 학습 시간 (예: "35분 20초")
+- `baseTime`: 인정 기준 시간 (예: "30분 00초")
+- `videoFilePath`: 동영상 파일 경로 (nullable)
+- `audioFilePath`: 오디오 파일 경로 (nullable)
+- `isCompleted`: 학습 완료 여부 계산 프로퍼티 (`progressPercent >= 100`)
+
 ---
 
 ## 개발 및 검증
@@ -693,6 +907,15 @@ LMS_TEST_PASSWORD="비밀번호" \
 ```
 
 필요하면 `LMS_TEST_TERM_ID`, `LMS_TEST_YEAR`, `LMS_TEST_SEMESTER`도 지정할 수 있습니다. `LMS_TEST_SEMESTER`는 `FIRST`, `SECOND`, `090`, `092`, `1학기`, `2학기` 형식을 지원합니다. 실제 계정 정보는 소스 코드나 커밋에 저장하지 마세요.
+
+사이버대학교(KCU) 계정으로 실제 서버와의 로그인 및 수강과목/수강일람 조회를 검증하려면 아래 환경 변수를 전달합니다:
+
+```bash
+CYBER_TEST_ID="사이버대학_아이디" \
+CYBER_TEST_PASSWORD="사이버대학_비밀번호" \
+./gradlew :library:jvmTest \
+  --tests "io.github.chlwhdtn03.CyberApiFullIntegrationTest" -i
+```
 
 ---
 
@@ -760,6 +983,8 @@ let package = Package(
 - `getTerms`, `getTodoList`, `getSubjects` 및 모든 유세인트(U-Saint) API는 반드시 `loginLMS` 인증이 완료된 후에 정상 호출 가능합니다.
 - iOS/Swift에서는 Kotlin `object LmsApi`가 싱글톤 객체로 변환되어 `LmsApi.shared` 형태로 접근합니다.
 - `LmsApi`는 단일 사용자 세션을 공유하므로 같은 프로세스에서 여러 계정의 요청을 동시에 처리하는 용도로 사용할 수 없습니다.
+- `CyberApi`는 숭실사이버대학교(KCU) 전용 객체로, 숭실대학교 `LmsApi`와 세션·토큰·쿠키를 전혀 공유하지 않습니다. 사이버대학교 기능 사용 전에는 반드시 `CyberApi.login`을 호출해야 합니다.
+- iOS/Swift에서는 Kotlin `object CyberApi` 또한 싱글톤 객체로 변환되어 `CyberApi.shared` 형태로 접근합니다.
 - `loadingState` 콜백 및 비동기 결과 수신 스레드는 메인(UI) 스레드를 보장하지 않습니다. SwiftUI/UIKit/Compose 등 화면 렌더링에 반영할 경우 메인 디스패처/스레드로의 컨텍스트 스위칭이 필요합니다.
 - 본 프로젝트는 순수 Swift 라이브러리가 아닌, Kotlin Multiplatform으로 개발되어 Kotlin/Native를 통해 iOS용 XCFramework 및 Android AAR 형태로 바인딩되는 구조입니다.
 - 숭실대학교 LMS 로그인 페이지 규격이나 유세인트 Web Dynpro 컴포넌트의 HTML 속성 또는 SAP 세션 구조가 변경될 시 정보 로딩이 정상적으로 이루어지지 않을 수 있습니다.

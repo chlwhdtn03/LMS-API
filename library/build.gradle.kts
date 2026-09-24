@@ -11,7 +11,7 @@ plugins {
 }
 
 group = "io.github.chlwhdtn03"
-version = "1.6.8"
+version = "1.6.9"
 
 val ktor_version: String by project
 
@@ -41,8 +41,10 @@ kotlin {
 
     macosArm64()
     val iosArm64 = iosArm64()
+    val iosX64 = iosX64()
+    val iosSimulatorArm64 = iosSimulatorArm64()
 
-    listOf(iosArm64).forEach { iosTarget ->
+    listOf(iosX64, iosArm64, iosSimulatorArm64).forEach { iosTarget ->
         iosTarget.binaries.framework {
             baseName = "LmsApi"
             binaryOption("bundleId", "io.github.chlwhdtn03.lms")
