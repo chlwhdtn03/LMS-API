@@ -1,5 +1,7 @@
 package io.github.chlwhdtn03
 
+import io.github.chlwhdtn03.data.Cyber.CyberEvaluation
+import io.github.chlwhdtn03.data.Cyber.CyberEvaluationType
 import io.github.chlwhdtn03.data.Cyber.CyberSubject
 import io.github.chlwhdtn03.data.Cyber.CyberWeek
 import io.github.chlwhdtn03.internal.CyberAuthService
@@ -147,6 +149,69 @@ object CyberApi {
                 CyberWeeklyLecturesResult(success = true, weeks = getWeeklyLectures(subject))
             } catch (throwable: Throwable) {
                 CyberWeeklyLecturesResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    /**
+     * 특정 수강과목의 학습평가응시 목록(시험, 퀴즈, 과제, 토론, 기타)을 가져옵니다.
+     * 출석 항목과, 제목이나 기간이 비어 있는(아직 등록되지 않은) 퀴즈/과제는 제외됩니다.
+     *
+     * LMS 서버가 세션에 저장된 "현재 강의실" 기준으로 목록을 응답하므로, 내부적으로 수강일람을
+     * 먼저 요청해 강의실을 [subject]로 전환한 뒤 목록을 조회합니다.
+     *
+     * @param subject [getSubjects]로 가져온 수강과목
+     * @return 학습평가 목록
+     */
+    @Throws(Exception::class)
+    suspend fun getEvaluations(subject: CyberSubject): List<CyberEvaluation> {
+        checkLoggedIn()
+        return courseService.getEvaluations(subject)
+    }
+
+    /**
+     * 특정 수강과목의 학습평가응시 목록을 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param subject [getSubjects]로 가져온 수강과목
+     * @param completion 결과 수신 콜백
+     */
+    fun getEvaluations(subject: CyberSubject, completion: (CyberEvaluationsResult) -> Unit) {
+        cyberApiScope.launch {
+            val result = try {
+                CyberEvaluationsResult(success = true, evaluations = getEvaluations(subject))
+            } catch (throwable: Throwable) {
+                CyberEvaluationsResult(success = false, errorMessage = throwable.toResultMessage())
+            }
+            completion(result)
+        }
+    }
+
+    /**
+     * 특정 수강과목의 학습평가 중 퀴즈와 과제만 가져옵니다.
+     *
+     * @param subject [getSubjects]로 가져온 수강과목
+     * @return 퀴즈/과제 목록
+     */
+    @Throws(Exception::class)
+    suspend fun getQuizzesAndAssignments(subject: CyberSubject): List<CyberEvaluation> {
+        return getEvaluations(subject).filter {
+            it.type == CyberEvaluationType.QUIZ || it.type == CyberEvaluationType.ASSIGNMENT
+        }
+    }
+
+    /**
+     * 특정 수강과목의 퀴즈/과제 목록을 비동기 방식으로 조회하고 그 결과를 completion 콜백으로 전달합니다.
+     *
+     * @param subject [getSubjects]로 가져온 수강과목
+     * @param completion 결과 수신 콜백
+     */
+    fun getQuizzesAndAssignments(subject: CyberSubject, completion: (CyberEvaluationsResult) -> Unit) {
+        cyberApiScope.launch {
+            val result = try {
+                CyberEvaluationsResult(success = true, evaluations = getQuizzesAndAssignments(subject))
+            } catch (throwable: Throwable) {
+                CyberEvaluationsResult(success = false, errorMessage = throwable.toResultMessage())
             }
             completion(result)
         }
