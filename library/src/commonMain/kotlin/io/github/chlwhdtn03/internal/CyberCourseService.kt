@@ -1,5 +1,7 @@
 package io.github.chlwhdtn03.internal
 
+import io.github.chlwhdtn03.data.Cyber.CyberEvaluation
+import io.github.chlwhdtn03.data.Cyber.CyberEvaluationType
 import io.github.chlwhdtn03.data.Cyber.CyberLecture
 import io.github.chlwhdtn03.data.Cyber.CyberSubject
 import io.github.chlwhdtn03.data.Cyber.CyberWeek
@@ -9,11 +11,21 @@ import io.ktor.client.*
 import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
-/** 사이버대학교 LMS(`lms.kcu.ac`)의 수강과목/수강일람 조회와 HTML 파싱을 담당합니다. */
+/**
+ * 사이버대학교 LMS(`lms.kcu.ac`)의 수강과목/수강일람/학습평가 조회와 HTML 파싱을 담당합니다.
+ *
+ * LMS 서버는 마지막으로 진입한 강의실(과목)을 세션에 저장하고, 학습평가 목록 등 일부 페이지는
+ * 과목 파라미터 없이 그 값을 기준으로 응답합니다. 그래서 강의실을 바꾸는 요청과 그에 의존하는
+ * 요청은 [classroomMutex]로 묶어 동시 호출 시 다른 과목의 결과가 섞이지 않게 합니다.
+ */
 internal class CyberCourseService(
     private val client: HttpClient,
 ) {
+    private val classroomMutex = Mutex()
+
     suspend fun getSubjects(): List<CyberSubject> {
         val response = client.submitForm(
             url = "$LMS_BASE_URL/atnlcSubj/list",
@@ -25,6 +37,29 @@ internal class CyberCourseService(
     }
 
     suspend fun getWeeklyLectures(subject: CyberSubject): List<CyberWeek> {
+        val html = classroomMutex.withLock { enterClassroom(subject) }
+        return parseWeeklyLectures(html)
+    }
+
+    suspend fun getEvaluations(subject: CyberSubject): List<CyberEvaluation> {
+        val html = classroomMutex.withLock {
+            enterClassroom(subject)
+            client.submitForm(
+                url = "$LMS_BASE_URL/atnlcSubj/lrnEvlApyexm/list",
+                formParameters = parameters {
+                    append("currSub", "05059")
+                    append("prgmId", "05059")
+                    append("subjType", "atnlcSubj")
+                    append("authrtSeCd", "")
+                },
+            ).bodyAsText()
+        }
+        checkClassroom(html, subject)
+        return parseEvaluations(html)
+    }
+
+    /** 수강일람 페이지를 요청해 서버 세션의 현재 강의실을 [subject]로 바꾸고, 그 응답 HTML을 반환합니다. */
+    private suspend fun enterClassroom(subject: CyberSubject): String {
         val response = client.submitForm(
             url = "$LMS_BASE_URL/atnlcSubj/atnlcApe/list",
             formParameters = parameters {
@@ -39,7 +74,79 @@ internal class CyberCourseService(
                 append("dertCd", subject.deptCode)
             },
         )
-        return parseWeeklyLectures(response.bodyAsText())
+        return response.bodyAsText()
+    }
+
+    /** 응답 페이지의 강의실 정보(hidden `shyr`/`smstCd`/`coseCd`)가 요청한 과목과 다르면 예외를 던집니다. */
+    private fun checkClassroom(html: String, subject: CyberSubject) {
+        val courseCode = hiddenInputValue(html, "coseCd")
+        val year = hiddenInputValue(html, "shyr")
+        val semesterCode = hiddenInputValue(html, "smstCd")
+        if (courseCode != subject.courseCode || year != subject.year || semesterCode != subject.semesterCode) {
+            throw IllegalStateException(
+                "학습평가 목록의 강의실(${year}/${semesterCode}/${courseCode})이 " +
+                    "요청한 과목(${subject.year}/${subject.semesterCode}/${subject.courseCode})과 다릅니다.",
+            )
+        }
+    }
+
+    /**
+     * 학습평가 목록을 파싱합니다. 출석 항목과, 제목이나 기간(시작/마감일시)이 비어 있는
+     * 퀴즈/과제(아직 등록되지 않은 자리표시 행)는 제외합니다.
+     */
+    internal fun parseEvaluations(html: String): List<CyberEvaluation> {
+        val tbody = EVALUATION_TBODY_REGEX.find(html)?.groupValues?.get(1) ?: return emptyList()
+        return EVALUATION_ROW_REGEX.findAll(tbody).map { match ->
+            val attributes = match.groupValues[1]
+            val row = match.groupValues[2]
+            val cells = TD_REGEX.findAll(row).map { it.groupValues[1] }.toList()
+            fun cell(index: Int): String = cells.getOrNull(index)?.let(::cellText).orEmpty()
+
+            val typeCode = attrValue(attributes, "data-evl-type").orEmpty()
+            CyberEvaluation(
+                type = CyberEvaluationType.fromCode(typeCode),
+                typeCode = typeCode,
+                typeName = cell(0),
+                round = cell(1).toIntOrNull(),
+                week = cell(2),
+                title = cell(3),
+                startAt = dateTimeText(cell(4)),
+                endAt = dateTimeText(cell(5)),
+                timeLimit = cell(6),
+                applyText = cell(7),
+                submitStatus = cell(8),
+                ratio = cell(9),
+                isInPeriod = attrValue(attributes, "data-peri") == "1",
+                isResubmission = attrValue(attributes, "data-is-add") == "1",
+                rawDeadlineFlag = attrValue(attributes, "data-ddln").orEmpty(),
+                hasApplyButton = APPLY_BUTTON_REGEX.containsMatchIn(row),
+            )
+        }.filter(::isCollectable).toList()
+    }
+
+    private fun isCollectable(evaluation: CyberEvaluation): Boolean {
+        return when (evaluation.type) {
+            CyberEvaluationType.ATTENDANCE -> false
+            CyberEvaluationType.QUIZ, CyberEvaluationType.ASSIGNMENT ->
+                evaluation.title.isNotEmpty() && evaluation.startAt.isNotEmpty() && evaluation.endAt.isNotEmpty()
+            else -> true
+        }
+    }
+
+    /** 셀 텍스트에서 첫 번째 `yyyy-MM-dd HH:mm` 일시만 꺼냅니다. `1차 : ` 같은 접두어는 버리고, 없으면 빈 문자열입니다. */
+    private fun dateTimeText(text: String): String {
+        return DATE_TIME_REGEX.find(text)?.value.orEmpty()
+    }
+
+    /** 셀 HTML에서 모바일용 라벨(`span.mTxt`)과 태그를 제거하고, `-`만 있는 칸은 빈 문자열로 바꿉니다. */
+    private fun cellText(cellHtml: String): String {
+        val text = cellHtml.replace(M_TXT_REGEX, "").stripHtmlTags()
+        return if (text == "-") "" else text
+    }
+
+    private fun hiddenInputValue(html: String, id: String): String? {
+        return Regex("""<input\b[^>]*\bid="$id"[^>]*\bvalue="([^"]*)"""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.get(1)
     }
 
     internal fun parseSubjects(html: String): List<CyberSubject> {
@@ -184,5 +291,18 @@ internal class CyberCourseService(
             """<button\b[^>]*class="btnFile btnDwnld"[^>]*>""",
             RegexOption.IGNORE_CASE,
         )
+
+        val EVALUATION_TBODY_REGEX = Regex(
+            """<table id="tblEvl">[\s\S]*?<tbody>([\s\S]*?)</tbody>""",
+            RegexOption.IGNORE_CASE,
+        )
+        val EVALUATION_ROW_REGEX = Regex(
+            """<tr\s+(data-evl-type="[^"]*"[^>]*)>([\s\S]*?)</tr>""",
+            RegexOption.IGNORE_CASE,
+        )
+        val DATE_TIME_REGEX = Regex("""\d{4}-\d{2}-\d{2} \d{2}:\d{2}""")
+        val TD_REGEX = Regex("""<td\b[^>]*>([\s\S]*?)</td>""", RegexOption.IGNORE_CASE)
+        val M_TXT_REGEX = Regex("""<span class="mTxt">[\s\S]*?</span>""", RegexOption.IGNORE_CASE)
+        val APPLY_BUTTON_REGEX = Regex("""class="[^"]*\bbtnEvlApyexm\b""", RegexOption.IGNORE_CASE)
     }
 }
