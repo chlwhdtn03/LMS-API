@@ -26,8 +26,9 @@ enum class CyberEvaluationType(val code: String) {
 /**
  * 학습평가응시 목록의 평가 한 건(퀴즈, 과제, 시험, 토론 등).
  *
- * 값이 없거나 `-`로 표시된 칸은 빈 문자열/null로 정규화한다. [endAt]은 과제의 경우
- * `1차 : 2026-11-02 23:59`처럼 차수 접두어가 붙은 원문 그대로다.
+ * 값이 없거나 `-`로 표시된 칸은 빈 문자열/null로 정규화한다. [startAt]/[endAt]은
+ * `yyyy-MM-dd HH:mm` 형식만 담으며, 과제 마감처럼 `1차 : 2026-11-02 23:59`로 표시되면 접두어를 버리고
+ * 일시가 여러 개면 맨 앞의 것을 쓴다.
  * [isInPeriod]는 `data-peri`(현재 응시/제출 기간 안인지), [isResubmission]은 `data-is-add`(과제 재제출 행),
  * [rawDeadlineFlag]는 의미가 확인되지 않은 `data-ddln` 원본 값이다.
  * [hasApplyButton]은 응시/제출 버튼이 HTML에 존재하는지만 나타내며, 과제의 경우 사이트 JS가

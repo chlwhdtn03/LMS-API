@@ -110,8 +110,8 @@ internal class CyberCourseService(
                 round = cell(1).toIntOrNull(),
                 week = cell(2),
                 title = cell(3),
-                startAt = cell(4),
-                endAt = cell(5),
+                startAt = dateTimeText(cell(4)),
+                endAt = dateTimeText(cell(5)),
                 timeLimit = cell(6),
                 applyText = cell(7),
                 submitStatus = cell(8),
@@ -131,6 +131,11 @@ internal class CyberCourseService(
                 evaluation.title.isNotEmpty() && evaluation.startAt.isNotEmpty() && evaluation.endAt.isNotEmpty()
             else -> true
         }
+    }
+
+    /** 셀 텍스트에서 첫 번째 `yyyy-MM-dd HH:mm` 일시만 꺼냅니다. `1차 : ` 같은 접두어는 버리고, 없으면 빈 문자열입니다. */
+    private fun dateTimeText(text: String): String {
+        return DATE_TIME_REGEX.find(text)?.value.orEmpty()
     }
 
     /** 셀 HTML에서 모바일용 라벨(`span.mTxt`)과 태그를 제거하고, `-`만 있는 칸은 빈 문자열로 바꿉니다. */
@@ -295,6 +300,7 @@ internal class CyberCourseService(
             """<tr\s+(data-evl-type="[^"]*"[^>]*)>([\s\S]*?)</tr>""",
             RegexOption.IGNORE_CASE,
         )
+        val DATE_TIME_REGEX = Regex("""\d{4}-\d{2}-\d{2} \d{2}:\d{2}""")
         val TD_REGEX = Regex("""<td\b[^>]*>([\s\S]*?)</td>""", RegexOption.IGNORE_CASE)
         val M_TXT_REGEX = Regex("""<span class="mTxt">[\s\S]*?</span>""", RegexOption.IGNORE_CASE)
         val APPLY_BUTTON_REGEX = Regex("""class="[^"]*\bbtnEvlApyexm\b""", RegexOption.IGNORE_CASE)

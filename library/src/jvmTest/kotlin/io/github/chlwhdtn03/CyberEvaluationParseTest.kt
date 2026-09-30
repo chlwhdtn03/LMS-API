@@ -86,7 +86,8 @@ class CyberEvaluationParseTest {
                 <td class="txtL tdTit">[중간과제] AI로 만든 결과물 &amp; 작업 과정 제출 (30%)</td>
                 <td class="mTit">2026-10-19 01:00</td>
                 <td class="mTit">
-                    1차 : 2026-11-02 23:59</td>
+                    1차 : 2026-11-02 23:59<br/>
+                    2차 : 2026-11-09 23:59</td>
                 <td class="mTit">
                     14일</td>
                 <td class="mTit">
@@ -152,7 +153,7 @@ class CyberEvaluationParseTest {
         assertEquals("08주차", assignment.week)
         assertEquals("[중간과제] AI로 만든 결과물 & 작업 과정 제출 (30%)", assignment.title)
         assertEquals("2026-10-19 01:00", assignment.startAt)
-        assertEquals("1차 : 2026-11-02 23:59", assignment.endAt)
+        assertEquals("2026-11-02 23:59", assignment.endAt)
         assertEquals("14일", assignment.timeLimit)
         assertEquals("참여", assignment.applyText)
         assertEquals("미제출", assignment.submitStatus)
