@@ -6,7 +6,7 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.minutes
 
 /**
- * 실제 사이버대학교(KCU) 계정으로 [CyberApi]의 로그인 -> 수강과목 -> 수강일람 흐름을 확인합니다.
+ * 실제 사이버대학교(KCU) 계정으로 로그인한 뒤 모든 수강과목의 주차별 강의 영상과 학습평가를 출력합니다.
  *
  * IntelliJ 실행 설정의 환경변수 또는 JVM 시스템 속성에 아래 값을 지정하면 실행됩니다.
  *
@@ -24,7 +24,7 @@ import kotlin.time.Duration.Companion.minutes
  */
 class CyberApiFullIntegrationTest {
     @Test
-    fun logsInAndFetchesSubjectsAndWeeklyLectures() = runTest(timeout = 5.minutes) {
+    fun printsLecturesAndEvaluationsOfAllSubjects() = runTest(timeout = 5.minutes) {
         val id = testSetting("CYBER_TEST_ID")
         val password = testSetting("CYBER_TEST_PASSWORD")
         if (id.isNullOrBlank() || password.isNullOrBlank()) {
@@ -51,25 +51,34 @@ class CyberApiFullIntegrationTest {
                 )
             }
 
-            val firstSubject = subjects.firstOrNull()
-            if (firstSubject == null) {
-                println("[CyberApiFullIntegrationTest] 수강과목이 없어 수강일람 조회는 건너뜁니다.")
-                return@runTest
-            }
-
-            val weeks = CyberApi.getWeeklyLectures(firstSubject)
-            println("[CyberApiFullIntegrationTest] '${firstSubject.name}' 주차 ${weeks.size}건")
-            weeks.forEach { week ->
-                println(
-                    "  - ${week.weekNo}주 [${week.attendanceStatus}] ${week.topic} " +
-                        "(${week.attendancePeriod})",
-                )
-                week.lectures.forEach { lecture ->
+            subjects.forEach { subject ->
+                val weeks = CyberApi.getWeeklyLectures(subject)
+                println("[CyberApiFullIntegrationTest] '${subject.name}' 주차 ${weeks.size}건")
+                weeks.forEach { week ->
                     println(
-                        "      ${lecture.lectureNo}강 ${lecture.statusText} " +
-                            "진도율=${lecture.progressPercent}% 완료=${lecture.isCompleted} " +
-                            "학습시간=${lecture.studyTime}/${lecture.baseTime} " +
-                            "video=${lecture.videoFilePath} audio=${lecture.audioFilePath}",
+                        "  - ${week.weekNo}주 [${week.attendanceStatus}] ${week.topic} " +
+                            "(${week.attendancePeriod})",
+                    )
+                    week.lectures.forEach { lecture ->
+                        println(
+                            "      ${lecture.lectureNo}강 ${lecture.statusText} " +
+                                "진도율=${lecture.progressPercent}% 완료=${lecture.isCompleted} " +
+                                "학습시간=${lecture.studyTime}/${lecture.baseTime} " +
+                                "video=${lecture.videoFilePath} audio=${lecture.audioFilePath}",
+                        )
+                    }
+                }
+
+                val evaluations = CyberApi.getEvaluations(subject)
+                println("[CyberApiFullIntegrationTest] '${subject.name}' 학습평가 ${evaluations.size}건")
+                evaluations.forEach { evaluation ->
+                    println(
+                        "  - [${evaluation.type}/${evaluation.typeName}] ${evaluation.round}차 " +
+                            "주차=${evaluation.week} 제목=${evaluation.title} " +
+                            "기간=${evaluation.startAt}~${evaluation.endAt} 제한=${evaluation.timeLimit} " +
+                            "응시=${evaluation.applyText} 현황=${evaluation.submitStatus} 비율=${evaluation.ratio} " +
+                            "peri=${evaluation.isInPeriod} 재제출=${evaluation.isResubmission} " +
+                            "ddln=${evaluation.rawDeadlineFlag} 버튼=${evaluation.hasApplyButton}",
                     )
                 }
             }
