@@ -83,6 +83,7 @@ data class Submission(
     val workflow_state: String? = "",
     val score: Double? = Double.NEGATIVE_INFINITY,
     val url: String? = "",
+    val excused: Boolean? = false, // 면제된 과제는 제출할 필요 없음
 ) {
     var name: String = "알 수 없음" // 과제 이름
     var groupName: String = "알 수 없음" // 과제 대분류명

@@ -19,4 +19,7 @@ data class TodoList(
     val moduleItemId: Int? = 0,
     val durationOfVideo: Double? = -1.0, // 영상 강의인 경우에만
     val attachments: List<Attachment>? = emptyList(), // 제출한 파일 항목
+    val due_at: String? = "", // 일반 마감 (과제에서는 due_date와 동일)
+    val lock_at: String? = "", // LMS 원본 잠금 시각
+    val submission_deadline: String? = "", // 실제 종료 기준; 종료값이 없으면 일반 마감
 )

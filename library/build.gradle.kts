@@ -70,6 +70,7 @@ kotlin {
 
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+            implementation("io.ktor:ktor-client-mock:${ktor_version}")
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
         }
 

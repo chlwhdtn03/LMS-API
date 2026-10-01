@@ -301,30 +301,8 @@ internal class TodoService(
             val assignmentId = submission.assignment_id?.takeIf { it > 0 } ?: continue
             if (!seenAssignmentIds.add(assignmentId)) continue
             if (submission.isCompletedForTodo()) continue
-            if (!submission.cached_due_date.isFutureInstant(now)) continue
-
             val detail = courseClient.fetchAssignmentDetail(courseId, assignmentId)
-            if (!detail.unlock_at.isUnlocked(now)) continue
-
-            val dueDate = submission.cached_due_date.orFallback(detail.due_at.orEmpty())
-            todoList += TodoList(
-                section_id = 0,
-                unit_id = 0,
-                component_id = 0,
-                generated_from_lecture_content = false,
-                component_type = when (detail.submission_types?.first().orEmpty()) {
-                    "online_quiz" -> "quiz"
-                    else -> "assignment"
-                },
-                assignment_id = assignmentId,
-                title = detail.name.orFallback(submission.name),
-                due_date = dueDate,
-                late_at = detail.late_at.orFallback(detail.lock_at.orEmpty()),
-                unlock_at = detail.unlock_at.orEmpty(),
-                description = detail.description,
-                url = detail.html_url,
-                attachments = submission.attachments
-            )
+            submission.toAssignmentTodo(detail, now)?.let { todoList += it }
         }
 
         if (includeCommons || includeCommonsForTracking) {
@@ -365,31 +343,12 @@ internal class TodoService(
             .asSequence()
             .filter { it.assignment_id?.takeIf { id -> id > 0 } != null }
             .distinctBy { it.assignment_id }
-            .filterNot { it.isCompletedForTodo() || !it.cached_due_date.isFutureInstant(now) }
+            .filterNot { it.isCompletedForTodo() }
             .map { submission ->
                 async {
                     val assignmentId = requireNotNull(submission.assignment_id)
                     val detail = courseClient.fetchAssignmentDetail(courseId, assignmentId)
-                    if (!detail.unlock_at.isUnlocked(now)) return@async null
-
-                    TodoList(
-                        section_id = 0,
-                        unit_id = 0,
-                        component_id = 0,
-                        generated_from_lecture_content = false,
-                        component_type = when (detail.submission_types?.first().orEmpty()) {
-                            "online_quiz" -> "quiz"
-                            else -> "assignment"
-                        },
-                        assignment_id = assignmentId,
-                        title = detail.name.orFallback(submission.name),
-                        due_date = submission.cached_due_date.orFallback(detail.due_at.orEmpty()),
-                        late_at = detail.late_at.orFallback(detail.lock_at.orEmpty()),
-                        unlock_at = detail.unlock_at.orEmpty(),
-                        description = detail.description,
-                        url = detail.html_url,
-                        attachments = submission.attachments,
-                    )
+                    submission.toAssignmentTodo(detail, now)
                 }
             }
             .toList()
@@ -419,12 +378,6 @@ internal class TodoService(
             commonsTrackingItems = commonsTrackingItems,
             completedCommonsSubmissions = relevantTodoDetails.toCompletedCommonsSubmissions(),
         )
-    }
-
-    private fun Submission.isCompletedForTodo(): Boolean {
-        return !submitted_at.isNullOrBlank() ||
-            workflow_state == "submitted" ||
-            workflow_state == "graded"
     }
 
     private fun Submission.isOverdueUnsubmitted(now: Instant): Boolean {
