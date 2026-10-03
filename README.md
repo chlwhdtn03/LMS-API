@@ -13,7 +13,7 @@
 - iOS device: `iosArm64`
 - macOS Apple Silicon: `macosArm64`
 
-현재 소스 빌드에는 JavaScript target과 iOS simulator target(`iosX64`, `iosSimulatorArm64`)이 포함되어 있지 않습니다. iOS 앱 연동은 GitHub Release에 배포된 XCFramework를 사용하는 SPM 방식을 권장합니다.
+현재 소스 빌드에는 JavaScript target이 포함되어 있지 않습니다. iOS는 실제 기기(`iosArm64`)와 시뮬레이터(`iosX64`, `iosSimulatorArm64`)를 지원합니다. iOS 앱 연동은 GitHub Release에 배포된 XCFramework를 사용하는 SPM 방식을 권장합니다.
 
 ---
 
@@ -60,7 +60,7 @@ Android 또는 Kotlin Multiplatform(KMP) 프로젝트에서는 Gradle 의존성�
 **Android 단일 프로젝트 (`build.gradle.kts`):**
 ```kotlin
 dependencies {
-    implementation("io.github.chlwhdtn03:lms:1.6.10")
+    implementation("io.github.chlwhdtn03:lms:1.6.11")
 }
 ```
 
@@ -69,7 +69,7 @@ dependencies {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("io.github.chlwhdtn03:lms:1.6.10")
+            implementation("io.github.chlwhdtn03:lms:1.6.11")
         }
     }
 }
@@ -956,6 +956,8 @@ let package = Package(
   ```
 
 ### 배포 파이프라인 진행 순서
+`assembleLmsApiXCFramework`는 Debug와 Release를 모두 빌드합니다. 배포용으로는 아래 Release 전용 태스크를 사용합니다. Kotlin/Native 링크 과정의 메모리 부족으로 Gradle 데몬이 종료되는 것을 방지하기 위해 `gradle.properties`에서 Gradle 힙을 4GB, worker 수를 2로 설정합니다. `JVM garbage collector is thrashing` 메시지가 나오면 `org.gradle.jvmargs`와 `org.gradle.workers.max`의 적용 값을 확인합니다.
+
 1. `./gradlew :library:assembleLmsApiReleaseXCFramework` 실행
 2. 빌드 결과인 `LmsApi.xcframework`를 `LmsApi.xcframework.zip`으로 압축
 3. `swift package compute-checksum LmsApi.xcframework.zip` 실행하여 체크섬 확보
@@ -974,7 +976,7 @@ let package = Package(
 3. Target 설정의 `General > Frameworks, Libraries, and Embedded Content` 항목에서 `LmsApi.xcframework`를 등록합니다.
 4. Kotlin Multiplatform static framework 이므로 Embed 속성은 `Do Not Embed`를 선택합니다.
 
-현재 소스 설정으로 직접 빌드한 XCFramework에는 `iosArm64` slice만 포함되므로 실제 iOS 기기용입니다.
+현재 소스 설정으로 직접 빌드한 XCFramework에는 실제 기기용 `iosArm64` slice와 시뮬레이터용 `iosX64` / `iosSimulatorArm64` slice가 포함됩니다.
 
 ---
 
