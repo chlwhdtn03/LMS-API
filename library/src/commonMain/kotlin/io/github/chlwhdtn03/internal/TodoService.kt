@@ -476,7 +476,9 @@ internal class TodoService(
                 if (contentData.item_content_data?.duration == null) continue
                 if (contentData.use_attendance == false) continue
                 if (item.completed == true) continue
-                if (!contentData.due_at.isFutureInstant(now)) continue
+                val submissionDeadline = contentData.late_at?.takeIf { it.isNotBlank() }
+                    ?: contentData.due_at
+                if (!submissionDeadline.isFutureInstant(now)) continue
                 if (!contentData.unlock_at.isUnlocked(now)) continue
 
                 val itemUnlockAt = contentData.unlock_at.takeUnless { it.isNullOrBlank() }
@@ -491,6 +493,8 @@ internal class TodoService(
                     assignment_id = -1,
                     title = contentData.title.orFallback(item.title.orEmpty()),
                     due_date = contentData.due_at.orEmpty(),
+                    due_at = contentData.due_at.orEmpty(),
+                    submission_deadline = submissionDeadline.orEmpty(),
                     late_at = contentData.late_at.orEmpty(),
                     unlock_at = itemUnlockAt,
                     description = contentData.description,

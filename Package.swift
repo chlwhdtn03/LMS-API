@@ -12,8 +12,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "LmsApi",
-            url: "https://github.com/chlwhdtn03/LMS-API/releases/download/1.6.11/LmsApi.xcframework.zip",
-            checksum: "6f195d7cffdc39e08ddc16374f27faf68e3a8aa7e7d4b16307e21997731b7912"
+            url: "https://github.com/chlwhdtn03/LMS-API/releases/download/1.6.12/LmsApi.xcframework.zip",
+            checksum: "1c32d43eaa1c21e47937e475934340fc2217893f4fd2fc35e0e1364e331a35a6"
         )
     ]
 )

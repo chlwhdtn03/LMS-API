@@ -55,7 +55,7 @@ class AssignmentTodoServiceTest {
             assertEquals((1..8).toSet(), requested.toSet())
             assertEquals(8, requested.size)
             assertEquals(sequential, parallel)
-            assertEquals(listOf(1, 2, 7), sequential.todoList.map { it.assignment_id })
+            assertEquals(listOf(1, 7), sequential.todoList.map { it.assignment_id })
             assertEquals(end, sequential.todoList.first().submission_deadline)
         } finally {
             client.close()

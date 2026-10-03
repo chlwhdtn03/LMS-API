@@ -20,7 +20,7 @@ class AssignmentTodoPolicyTest {
     private val detail = AssignmentDetail(due_at = before, late_at = after, lock_at = later, published = true)
 
     @Test
-    fun observedLmsResponseUsesLockAtWithoutLateAt() {
+    fun observedLmsResponseWithoutLateAtDoesNotExtendDueDate() {
         // Dates/statuses observed in LMSTest on 2026-10-01; IDs and other personal fields removed.
         val observedDetail = Json.decodeFromString<AssignmentDetail>("""
             {
@@ -45,11 +45,12 @@ class AssignmentTodoPolicyTest {
         assertNull(observedSubmission.toAssignmentTodo(observedDetail, now))
         // Synthetic unsubmitted variant of the observed response; no server mutation.
         val unsubmitted = observedSubmission.copy(submitted_at = null, workflow_state = "unsubmitted")
-        val todo = assertNotNull(unsubmitted.toAssignmentTodo(observedDetail, now))
-        assertEquals("2026-09-28T14:59:59Z", todo.due_at)
+        assertNull(unsubmitted.toAssignmentTodo(observedDetail, now))
+        val beforeDue = Instant.parse("2026-09-27T12:00:00Z")
+        val todo = assertNotNull(unsubmitted.toAssignmentTodo(observedDetail, beforeDue))
+        assertEquals("2026-09-28T14:59:59Z", todo.submission_deadline)
         assertEquals("2026-10-30T14:59:59Z", todo.lock_at)
-        assertEquals(todo.lock_at, todo.submission_deadline)
-        assertNull(unsubmitted.toAssignmentTodo(observedDetail, Instant.parse("2026-10-30T14:59:59Z")))
+        assertEquals("", todo.late_at)
     }
 
     @Test
@@ -59,30 +60,33 @@ class AssignmentTodoPolicyTest {
         assertEquals(before, todo.due_at)
         assertEquals(after, todo.late_at)
         assertEquals(later, todo.lock_at)
-        assertEquals(later, todo.submission_deadline)
+        assertEquals(after, todo.submission_deadline)
         assertEquals(todo, Json.decodeFromString<TodoList>(Json.encodeToString(todo)))
         assertTrue(Json.encodeToString(todo).contains("\"submission_deadline\""))
     }
 
     @Test
-    fun lockAtIsAuthoritativeLateSubmissionDeadline() {
-        assertEquals(later, assertNotNull(submission.toAssignmentTodo(detail, now)).submission_deadline)
-        assertNotNull(submission.toAssignmentTodo(detail, Instant.parse(after)))
-        assertNull(submission.toAssignmentTodo(detail, Instant.parse(later)))
-        assertNull(submission.toAssignmentTodo(detail.copy(lock_at = before), now))
-        assertNotNull(submission.toAssignmentTodo(detail.copy(late_at = before), now))
-        assertNotNull(submission.toAssignmentTodo(detail.copy(late_at = "invalid"), now))
-        assertNull(submission.toAssignmentTodo(detail.copy(lock_at = null, late_at = current), now))
+    fun lateAtIsAuthoritativeLateSubmissionDeadline() {
+        assertEquals(after, assertNotNull(submission.toAssignmentTodo(detail, now)).submission_deadline)
+        assertNull(submission.toAssignmentTodo(detail, Instant.parse(after)))
+        assertNotNull(submission.toAssignmentTodo(detail.copy(lock_at = before), now))
+        assertNotNull(submission.toAssignmentTodo(detail.copy(lock_at = "invalid"), now))
+        assertNull(submission.toAssignmentTodo(detail.copy(late_at = before), now))
+        assertNull(submission.toAssignmentTodo(detail.copy(late_at = "invalid"), now))
+        assertNull(submission.toAssignmentTodo(detail.copy(late_at = current), now))
     }
 
     @Test
-    fun lockOrLateAloneAllowsLateSubmissionButMissingEndDoesNot() {
-        assertNotNull(submission.toAssignmentTodo(detail.copy(late_at = null), now))
+    fun missingLateAtFallsBackToDueWithoutUsingLockAt() {
+        for (late in listOf(null, "", " ")) {
+            assertNull(submission.toAssignmentTodo(detail.copy(late_at = late), now))
+            val upcoming = detail.copy(due_at = after, late_at = late, lock_at = later)
+            val todo = assertNotNull(submission.toAssignmentTodo(upcoming, now))
+            assertEquals(after, todo.submission_deadline)
+            assertEquals(late.orEmpty(), todo.late_at)
+            assertNull(submission.toAssignmentTodo(upcoming, Instant.parse(after)))
+        }
         assertNotNull(submission.toAssignmentTodo(detail.copy(lock_at = null), now))
-        assertNull(submission.toAssignmentTodo(detail.copy(late_at = null, lock_at = ""), now))
-        val upcoming = detail.copy(due_at = after, late_at = null, lock_at = null)
-        assertEquals(after, assertNotNull(submission.toAssignmentTodo(upcoming, now)).submission_deadline)
-        assertNull(submission.toAssignmentTodo(upcoming, Instant.parse(after)))
     }
 
     @Test
@@ -98,14 +102,14 @@ class AssignmentTodoPolicyTest {
 
     @Test
     fun invalidBoundsAndUnknownAllDatesAreExcluded() {
-        for (d in listOf(detail.copy(unlock_at = "invalid"), detail.copy(lock_at = null, late_at = "invalid"), detail.copy(lock_at = "invalid"))) {
+        for (d in listOf(detail.copy(unlock_at = "invalid"), detail.copy(late_at = "invalid"))) {
             assertNull(submission.toAssignmentTodo(d, now))
         }
         val noDue = submission.copy(cached_due_date = null)
         assertNull(noDue.toAssignmentTodo(AssignmentDetail(due_at = "invalid"), now))
         val bounded = assertNotNull(noDue.toAssignmentTodo(detail.copy(due_at = null), now))
         assertEquals("", bounded.due_date)
-        assertEquals(later, bounded.submission_deadline)
+        assertEquals(after, bounded.submission_deadline)
     }
 
     @Test
@@ -129,13 +133,13 @@ class AssignmentTodoPolicyTest {
         assertNull(submission.copy(excused = true).toAssignmentTodo(detail, now))
         // late is a submission lateness flag, not permission to submit.
         assertNotNull(submission.copy(late = true).toAssignmentTodo(detail, now))
-        assertNull(submission.copy(late = true).toAssignmentTodo(detail.copy(lock_at = before), now))
+        assertNull(submission.copy(late = true).toAssignmentTodo(detail.copy(late_at = before), now))
     }
 
     @Test
     fun timezoneOffsetsAreComparedAsInstantsAndEmptyTypesDoNotThrow() {
         val todo = assertNotNull(submission.toAssignmentTodo(detail.copy(
-            lock_at = "2026-10-02T21:00:00+09:00", submission_types = emptyList(),
+            late_at = "2026-10-02T21:00:00+09:00", submission_types = emptyList(),
         ), now))
         assertEquals(after, todo.submission_deadline)
         assertEquals("assignment", todo.component_type)

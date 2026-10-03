@@ -22,9 +22,8 @@ internal fun Submission.toAssignmentTodo(detail: AssignmentDetail, now: Instant)
         takeUnless { it.isNullOrBlank() }?.let { runCatching { Instant.parse(it) }.getOrNull() }
 
     // Invalid availability bounds must not silently become unrestricted availability.
-    // lock_at is the SSU LMS late-submission deadline (confirmed by the caller).
-    // Only consult late_at when lock_at is absent; a stale late_at cannot shorten lock_at.
-    val endValue = detail.lock_at?.takeIf { it.isNotBlank() } ?: detail.late_at
+    // late_at is the late-submission deadline; lock_at is retained as raw metadata only.
+    val endValue = detail.late_at
     val availabilityDates = listOf(detail.unlock_at, endValue)
     if (availabilityDates.any { !it.isNullOrBlank() && it.parseDate() == null }) return null
     val unlock = detail.unlock_at.parseDate()
@@ -46,8 +45,7 @@ internal fun Submission.toAssignmentTodo(detail: AssignmentDetail, now: Instant)
         assignment_id = assignmentId,
         title = detail.name?.takeIf { it.isNotBlank() } ?: name,
         due_date = due?.toString().orEmpty(),
-        // Retain the existing lock fallback for consumers of late_at. Use submission_deadline for decisions.
-        late_at = detail.late_at?.takeIf { it.isNotBlank() } ?: detail.lock_at.orEmpty(),
+        late_at = detail.late_at.orEmpty(),
         unlock_at = detail.unlock_at.orEmpty(),
         description = detail.description,
         url = detail.html_url,
