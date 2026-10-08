@@ -60,7 +60,7 @@ Android 또는 Kotlin Multiplatform(KMP) 프로젝트에서는 Gradle 의존성�
 **Android 단일 프로젝트 (`build.gradle.kts`):**
 ```kotlin
 dependencies {
-    implementation("io.github.chlwhdtn03:lms:1.6.12")
+    implementation("io.github.chlwhdtn03:lms:1.6.13")
 }
 ```
 
@@ -69,7 +69,7 @@ dependencies {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("io.github.chlwhdtn03:lms:1.6.12")
+            implementation("io.github.chlwhdtn03:lms:1.6.13")
         }
     }
 }
@@ -718,9 +718,17 @@ fun logout(completion: () -> Unit)
 #### `CyberApi.getSubjects`
 ```kotlin
 suspend fun getSubjects(): List<CyberSubject>
+suspend fun getSubjects(postHogDistinctId: String?): List<CyberSubject>
 fun getSubjects(completion: (CyberSubjectsResult) -> Unit)
+fun getSubjects(postHogDistinctId: String?, completion: (CyberSubjectsResult) -> Unit)
 ```
 로그인된 사용자의 이번 학기 수강과목 목록(`CyberSubject`)을 가져옵니다. 과목명, 이수구분, 담당 교수, 학점, 전체 진도율 등이 포함되어 있습니다. (로그인 필수)
+
+`postHogDistinctId`를 전달하면 전체 과목의 주차별 강의와 학습평가를 추가 조회한 뒤 `todo_snapshot_cyber`와 `$identify`를 함께 전송합니다. LMS와 동일하게 식별자별 UTC 날짜 기준 하루 한 번 전송 여부를 20% 확률로 샘플링하며, 전송 이력은 LMS와 별개인 메모리 캐시입니다. 식별자를 생략하거나 null/빈 문자열을 전달하면 추가 조회와 전송이 없습니다. 기존 앱에서 분석을 활성화하려면 `CyberApi.getSubjects(postHogDistinctId = distinctId)`를 호출하세요.
+
+스냅샷 속성은 LMS와 동일하며, 동영상은 진도율 100% 이상이면 완료, 퀴즈/과제는 제출·응시 완료 상태이면 완료로 계산합니다. 미제출은 미완료이면서 마감이 지난 항목이고, 전체 개수에는 기한이 남은 항목도 포함됩니다. 시험/토론은 제외하며 본제출/재제출 행은 중복 집계하지 않습니다. 사이버 날짜는 한국 시간으로 해석하고 출석인정기간은 종료일 끝까지 인정합니다. 과목 코드는 문자열이므로 `items.course_id`도 문자열입니다.
+
+`$identify`는 LMS와 사이버가 공유하는 PostHog 기본 식별 이벤트이며 `$set`/`$set_once`로 사용자 속성을 갱신합니다. 속성명은 LMS와 동일하게 유지하며 `_cyber`는 스냅샷 이벤트명에만 붙입니다. 동일한 식별자를 전달하면 최초/마지막 동기화 사용자 속성은 LMS와 사이버가 공유하므로, 서비스별 미제출률은 각 스냅샷 이벤트의 `snapshot_unsubmitted_ratio`로 분석하세요. 전체 과목 조회가 실패하면 스냅샷을 전송하지 않으며 조회 오류를 반환합니다. PostHog 전송 실패는 LMS와 동일하게 조회 결과에 영향을 주지 않습니다.
 
 #### `CyberApi.getWeeklyLectures`
 ```kotlin

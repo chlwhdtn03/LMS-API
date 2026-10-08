@@ -6,6 +6,8 @@ import io.github.chlwhdtn03.data.Cyber.CyberSubject
 import io.github.chlwhdtn03.data.Cyber.CyberWeek
 import io.github.chlwhdtn03.internal.CyberAuthService
 import io.github.chlwhdtn03.internal.CyberCourseService
+import io.github.chlwhdtn03.internal.CyberTodoService
+import io.github.chlwhdtn03.internal.TodoSnapshotTracker
 import io.ktor.client.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.plugins.cookies.*
@@ -46,6 +48,11 @@ object CyberApi {
 
     private val authService = CyberAuthService(cyberClient)
     private val courseService = CyberCourseService(cyberClient)
+    private val trackedTodoSnapshotDatesByDistinctId = mutableMapOf<String, String>()
+    private val todoService = CyberTodoService(
+        courseService,
+        TodoSnapshotTracker(cyberClient, cyberApiScope, trackedTodoSnapshotDatesByDistinctId, eventSuffix = "_cyber"),
+    )
 
     private fun checkLoggedIn() {
         if (!isLoggined) {
@@ -105,8 +112,18 @@ object CyberApi {
      */
     @Throws(Exception::class)
     suspend fun getSubjects(): List<CyberSubject> {
+        return getSubjects(postHogDistinctId = null)
+    }
+
+    /**
+     * 수강과목 목록을 조회하고, 식별자가 있으면 전체 과목의 강의·퀴즈·과제 상태를 수집합니다.
+     * 사용자별 하루 한 번 20% 확률로 todo_snapshot_cyber와 $identify를 전송합니다.
+     * null 또는 빈 식별자이면 추가 조회와 분석 전송을 하지 않습니다.
+     */
+    @Throws(Exception::class)
+    suspend fun getSubjects(postHogDistinctId: String?): List<CyberSubject> {
         checkLoggedIn()
-        return courseService.getSubjects()
+        return todoService.getSubjects(postHogDistinctId)
     }
 
     /**
@@ -115,9 +132,14 @@ object CyberApi {
      * @param completion 결과 수신 콜백
      */
     fun getSubjects(completion: (CyberSubjectsResult) -> Unit) {
+        getSubjects(postHogDistinctId = null, completion = completion)
+    }
+
+    /** 분석 식별자를 전달하면 전체 과목의 강의·퀴즈·과제 스냅샷도 수집합니다. */
+    fun getSubjects(postHogDistinctId: String?, completion: (CyberSubjectsResult) -> Unit) {
         cyberApiScope.launch {
             val result = try {
-                CyberSubjectsResult(success = true, subjects = getSubjects())
+                CyberSubjectsResult(success = true, subjects = getSubjects(postHogDistinctId))
             } catch (throwable: Throwable) {
                 CyberSubjectsResult(success = false, errorMessage = throwable.toResultMessage())
             }

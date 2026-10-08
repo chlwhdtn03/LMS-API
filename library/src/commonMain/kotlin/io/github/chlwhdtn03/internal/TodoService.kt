@@ -1,19 +1,12 @@
 package io.github.chlwhdtn03.internal
 
 import io.github.chlwhdtn03.LmsApi
-import io.github.chlwhdtn03.TODO_SNAPSHOT_SAMPLE_RATE
 import io.github.chlwhdtn03.data.Lms.*
-import io.github.chlwhdtn03.shouldSendTodoSnapshot
 import io.ktor.client.*
-import io.ktor.client.request.*
-import io.ktor.http.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.*
-import kotlin.random.Random
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -604,105 +597,27 @@ internal class TodoService(
         return result
     }
 
+    private val snapshotTracker = TodoSnapshotTracker(client, backgroundScope, trackedSnapshotDates)
+
     private fun trackTodoSync(
         stats: LmsApi.UnsubmittedStats,
         items: List<TodoTrackingItem>,
         postHogDistinctId: String?,
     ) {
-        val distinctId = postHogDistinctId?.trim()?.takeIf { it.isNotBlank() } ?: return
-        val now = Clock.System.now().toString()
-        val today = now.substringBefore('T')
-        if (trackedSnapshotDates[distinctId] == today) return
-        trackedSnapshotDates[distinctId] = today
-
-        val syncId = "todo_sync:${Random.nextLong()}:$now"
-        if (!shouldSendTodoSnapshot()) return
-
-        val events = listOf(
-            PostHogBatchEvent(
-                event = POSTHOG_IDENTIFY_EVENT,
-                properties = buildJsonObject {
-                    put("distinct_id", distinctId)
-                    put("\$set", buildJsonObject {
-                        put("last_todo_sync_at", now)
-                    })
-                    put("\$set_once", buildJsonObject {
-                        put("initial_at", now)
-                        put("initial_todo_sync_at", now)
-                        put("initial_total_count", stats.totalCount)
-                        put("initial_unsubmitted_count", stats.unsubmittedCount)
-                        put("initial_unsubmitted_ratio", stats.ratio)
-                    })
-                },
-                timestamp = now,
-            ),
-            PostHogBatchEvent(
-                event = POSTHOG_TODO_SNAPSHOT_EVENT,
-                properties = buildJsonObject {
-                    put("distinct_id", distinctId)
-                    put("sync_id", syncId)
-                    put("synced_at", now)
-                    put("snapshot_sample_rate", TODO_SNAPSHOT_SAMPLE_RATE)
-                    put("snapshot_total_count", stats.totalCount)
-                    put("snapshot_unsubmitted_count", stats.unsubmittedCount)
-                    put("snapshot_unsubmitted_ratio", stats.ratio)
-                    put("item_keys", buildJsonArray {
-                        items.forEach { add(JsonPrimitive(it.itemKey)) }
-                    })
-                    put("overdue_unsubmitted_item_keys", buildJsonArray {
-                        items.filter { it.isOverdueUnsubmitted }
-                            .forEach { add(JsonPrimitive(it.itemKey)) }
-                    })
-                    put("items", buildJsonArray {
-                        for (item in items) {
-                            add(buildJsonObject {
-                                put("item_key", item.itemKey)
-                                put("item_type", item.itemType)
-                                put("course_id", item.courseId)
-                                put("due_at", item.dueAt)
-                                put("is_completed", item.isCompleted)
-                                put("is_overdue_unsubmitted", item.isOverdueUnsubmitted)
-                                item.workflowState?.let { put("workflow_state", it) }
-                                item.late?.let { put("late", it) }
-                            })
-                        }
-                    })
-                },
-                timestamp = now,
-            ),
-        )
-
-        backgroundScope.launch {
-            runCatching {
-                client.post(POSTHOG_BATCH_URL) {
-                    contentType(ContentType.Application.Json)
-                    setBody(PostHogBatchRequest(POSTHOG_PROJECT_API_KEY, events))
-                }
-            }
-        }
+        snapshotTracker.track(stats, items.map {
+            TodoSnapshotItem(
+                itemKey = it.itemKey,
+                itemType = it.itemType,
+                courseId = JsonPrimitive(it.courseId),
+                dueAt = it.dueAt,
+                isCompleted = it.isCompleted,
+                isOverdueUnsubmitted = it.isOverdueUnsubmitted,
+                workflowState = it.workflowState,
+                late = it.late,
+            )
+        }, postHogDistinctId)
     }
 
-    @Serializable
-    private data class PostHogBatchRequest(
-        @SerialName("api_key")
-        val apiKey: String,
-        val batch: List<PostHogBatchEvent>,
-    )
-
-    @Serializable
-    private data class PostHogBatchEvent(
-        val event: String,
-        val properties: JsonObject,
-        val timestamp: String,
-    )
-
-    private companion object {
-        const val POSTHOG_PROJECT_API_KEY =
-            "phc_o6q2pUmTRryWQ6Np5HkqLA2q4d6jdR6mVhGf5bqaKgtT"
-        const val POSTHOG_BATCH_URL = "https://us.i.posthog.com/batch/"
-        const val POSTHOG_IDENTIFY_EVENT = "\$identify"
-        const val POSTHOG_TODO_SNAPSHOT_EVENT = "todo_snapshot"
-    }
 }
 
 internal data class TodoTrackingItem(
